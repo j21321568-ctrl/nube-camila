@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nube Privada de Camila ✨</title>
+    <meta name="description" content="Espacio de almacenamiento seguro, exclusivo y privado en la nube para Camila.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Fondo Ambiental Dinámico y Malla Shiori Sentinel -->
+    <canvas id="sentinelCanvas" class="sentinel-canvas"></canvas>
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+    <div class="ambient-glow glow-3"></div>
+
+    <!-- Contenedor de Alerta de Reactivación de Servidor (Render Free Tier) -->
+    <div id="coldStartBanner" class="cold-start-banner hidden">
+        <div class="cold-start-content">
+            <div class="pulsing-spinner"></div>
+            <div class="cold-start-text">
+                <strong>Conectando con el servidor seguro de Camila... ✨</strong>
+                <span>El servidor se encuentra en reposo en la nube. Despertará en unos 20-30 segundos. ¡Gracias por esperar!</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 1. Pantalla de Bloqueo (Vault Lock) -->
+    <section id="lockScreen" class="lock-screen">
+        <div class="vault-card glass-panel">
+            <div class="vault-avatar">
+                <div class="monogram-ring">
+                    <span class="monogram">C</span>
+                </div>
+                <div class="lock-icon-badge">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+            </div>
+
+            <h1 class="vault-title">Nube Privada de Camila</h1>
+            <p class="vault-subtitle">Tu espacio personal, seguro y exclusivo en la nube ✨</p>
+
+            <form id="loginForm" class="vault-form">
+                <div class="input-group">
+                    <i class="fa-solid fa-key input-icon"></i>
+                    <input 
+                        type="password" 
+                        id="passwordInput" 
+                        placeholder="Ingresa tu contraseña secreta..." 
+                        autocomplete="current-password"
+                        required
+                    >
+                    <button type="button" id="togglePasswordBtn" class="toggle-eye-btn" title="Mostrar/Ocultar contraseña">
+                        <i class="fa-solid fa-eye"></i>
+                    </button>
+                </div>
+
+                <div id="loginError" class="login-error hidden">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span id="loginErrorText">Contraseña incorrecta</span>
+                </div>
+
+                <button type="submit" id="unlockBtn" class="btn btn-primary btn-block">
+                    <span>Desbloquear Mi Nube</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </form>
+
+            <div class="vault-footer">
+                <button id="openServerSettingsBtn" class="link-btn" title="Configurar conexión con el servidor">
+                    <i class="fa-solid fa-sliders"></i> Ajustes de conexión
+                </button>
+                <div class="encryption-tag">
+                    <i class="fa-solid fa-shield-halved"></i> Protección activa por Shiori v14
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- 2. Aplicación Principal (Dashboard) -->
+    <div id="appContainer" class="app-container hidden">
+        <!-- Barra de Navegación Superior -->
+        <header class="top-nav glass-panel">
+            <div class="nav-brand">
+                <div class="nav-monogram">C</div>
+                <div class="brand-text">
+                    <span class="brand-title">Nube de Camila</span>
+                    <span class="brand-badge"><i class="fa-solid fa-shield-halved"></i> Protegido por Shiori</span>
+                </div>
+            </div>
+
+            <!-- Buscador en tiempo real -->
+            <div class="nav-search">
+                <i class="fa-solid fa-magnifying-glass search-icon"></i>
+                <input 
+                    type="text" 
+                    id="searchInput" 
+                    placeholder="Buscar fotos, documentos, audios..." 
+                    autocomplete="off"
+                >
+                <button id="clearSearchBtn" class="clear-search-btn hidden">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <!-- Acciones de Usuario -->
+            <div class="nav-actions">
+                <div class="user-greeting-pill">
+                    <i class="fa-solid fa-sparkles spark-icon"></i>
+                    <span id="greetingText">Hola, Camila ✨</span>
+                </div>
+                <button id="storageStatsBtn" class="icon-btn" title="Estadísticas de Almacenamiento">
+                    <i class="fa-solid fa-chart-pie"></i>
+                </button>
+                <button id="serverConfigBtn" class="icon-btn" title="Ajustes de Servidor">
+                    <i class="fa-solid fa-gear"></i>
+                </button>
+                <button id="logoutBtn" class="icon-btn danger-hover" title="Cerrar Bóveda">
+                    <i class="fa-solid fa-arrow-right-from-bracket"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Barra de Herramientas y Filtros -->
+        <div class="toolbar-section">
+            <div class="categories-bar">
+                <button class="cat-pill active" data-category="all">
+                    <i class="fa-solid fa-layer-group"></i> Todos
+                </button>
+                <button class="cat-pill" data-category="starred">
+                    <i class="fa-solid fa-heart"></i> Favoritos
+                </button>
+                <button class="cat-pill" data-category="image">
+                    <i class="fa-solid fa-image"></i> Fotos
+                </button>
+                <button class="cat-pill" data-category="document">
+                    <i class="fa-solid fa-file-lines"></i> Documentos
+                </button>
+                <button class="cat-pill" data-category="audio">
+                    <i class="fa-solid fa-music"></i> Música
+                </button>
+                <button class="cat-pill" data-category="video">
+                    <i class="fa-solid fa-video"></i> Videos
+                </button>
+                <button class="cat-pill" data-category="archive">
+                    <i class="fa-solid fa-box-archive"></i> Archivos
+                </button>
+            </div>
+
+            <div class="toolbar-actions">
+                <!-- Selector de Vista: Cuadrícula vs Lista -->
+                <div class="view-toggle-group">
+                    <button id="gridViewBtn" class="view-toggle-btn active" title="Vista en Cuadrícula">
+                        <i class="fa-solid fa-grip"></i>
+                    </button>
+                    <button id="listViewBtn" class="view-toggle-btn" title="Vista en Lista">
+                        <i class="fa-solid fa-list-ul"></i>
+                    </button>
+                </div>
+
+                <!-- Botón de Refrescar -->
+                <button id="refreshBtn" class="btn btn-secondary" title="Actualizar lista">
+                    <i class="fa-solid fa-rotate-right"></i>
+                </button>
+
+                <!-- Botón Principal de Subida -->
+                <button id="uploadTriggerBtn" class="btn btn-primary">
+                    <i class="fa-solid fa-cloud-arrow-up"></i>
+                    <span>Subir Archivos</span>
+                </button>
+                <input type="file" id="fileInput" multiple style="display: none;">
+            </div>
+        </div>
+
+        <!-- Zona Interactiva de Drag & Drop y Portapapeles (Ctrl+V) -->
+        <div id="dropZone" class="drop-zone glass-panel">
+            <div class="drop-zone-icon">
+                <i class="fa-solid fa-cloud-arrow-up"></i>
+            </div>
+            <div class="drop-zone-text">
+                <strong>Arrastra y suelta tus archivos aquí</strong>
+                <p>o presiona <kbd>Ctrl + V</kbd> para subir capturas de pantalla desde tu portapapeles</p>
+            </div>
+            <button id="browseFilesBtn" class="btn btn-sm btn-outline">
+                Explorar en mi equipo
+            </button>
+        </div>
+
+        <!-- Barra de Progreso Flotante de Subida -->
+        <div id="uploadProgressCard" class="upload-progress-card glass-panel hidden">
+            <div class="upload-progress-header">
+                <div class="uploading-info">
+                    <div class="spinner-small"></div>
+                    <span id="uploadingFileName">Subiendo archivos a Google Drive...</span>
+                </div>
+                <span id="uploadProgressPercent">0%</span>
+            </div>
+            <div class="progress-track">
+                <div id="uploadProgressBar" class="progress-fill" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <!-- Contenedor Principal de Archivos -->
+        <main class="content-area">
+            <!-- Resumen de vista y contador -->
+            <div class="files-header">
+                <div class="files-count-text">
+                    <span id="filesCountDisplay">Cargando archivos...</span>
+                </div>
+                <div class="sort-selector">
+                    <label for="sortBySelect"><i class="fa-solid fa-arrow-down-short-wide"></i></label>
+                    <select id="sortBySelect">
+                        <option value="newest">Más recientes primero</option>
+                        <option value="oldest">Más antiguos primero</option>
+                        <option value="name_asc">Nombre (A - Z)</option>
+                        <option value="name_desc">Nombre (Z - A)</option>
+                        <option value="size_desc">Mayor tamaño</option>
+                        <option value="size_asc">Menor tamaño</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Cuadrícula de Archivos (Grid View) -->
+            <div id="filesGrid" class="files-grid">
+                <!-- Se inyecta dinámicamente mediante JavaScript -->
+            </div>
+
+            <!-- Tabla de Archivos (List View) -->
+            <div id="filesListContainer" class="files-list-container hidden">
+                <table class="files-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;"></th>
+                            <th>Nombre</th>
+                            <th>Tipo</th>
+                            <th>Tamaño</th>
+                            <th>Fecha</th>
+                            <th style="text-align: right; width: 140px;">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody id="filesTableBody">
+                        <!-- Filas inyectadas dinámicamente -->
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Estado Vacío (Empty State) -->
+            <div id="emptyState" class="empty-state hidden">
+                <div class="empty-illustration">
+                    <i class="fa-solid fa-folder-open"></i>
+                </div>
+                <h3 id="emptyStateTitle">Aún no hay archivos aquí</h3>
+                <p id="emptyStateSubtitle">¡Arrastra tus fotos, documentos o recuerdos favoritos para comenzar!</p>
+                <button id="emptyUploadBtn" class="btn btn-primary">
+                    <i class="fa-solid fa-plus"></i> Subir mi primer archivo
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- 3. Modal de Visor Multimedia (In-App Lightbox & Player) -->
+    <div id="previewModal" class="modal-backdrop hidden">
+        <div class="modal-window preview-window glass-panel">
+            <div class="modal-header">
+                <div class="modal-title-wrap">
+                    <i id="previewIcon" class="fa-solid fa-file"></i>
+                    <h3 id="previewTitle" class="modal-title">Previsualización</h3>
+                </div>
+                <div class="modal-actions">
+                    <button id="previewDownloadBtn" class="icon-btn" title="Descargar archivo">
+                        <i class="fa-solid fa-download"></i>
+                    </button>
+                    <button id="closePreviewBtn" class="icon-btn" title="Cerrar (Esc)">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-body preview-body" id="previewContent">
+                <!-- Contenido multimedia dinámico (img, video, audio, iframe) -->
+            </div>
+            <div class="modal-footer preview-footer">
+                <span id="previewMeta">0 B · 00/00/0000</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 4. Modal para Renombrar Archivo -->
+    <div id="renameModal" class="modal-backdrop hidden">
+        <div class="modal-window rename-window glass-panel">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fa-solid fa-pen-to-square"></i> Renombrar Archivo</h3>
+                <button id="closeRenameBtn" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="renameForm" class="modal-body">
+                <p class="modal-desc">Ingresa el nuevo nombre para este archivo:</p>
+                <div class="input-group">
+                    <input type="text" id="renameInput" required autocomplete="off">
+                </div>
+                <div class="modal-btn-row">
+                    <button type="button" id="cancelRenameBtn" class="btn btn-secondary">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar Cambios</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 5. Modal para Confirmar Eliminación -->
+    <div id="deleteModal" class="modal-backdrop hidden">
+        <div class="modal-window delete-window glass-panel">
+            <div class="modal-header">
+                <h3 class="modal-title danger-text"><i class="fa-solid fa-trash-can"></i> ¿Eliminar Archivo?</h3>
+                <button id="closeDeleteBtn" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p>¿Estás segura de que deseas enviar este archivo a la papelera?</p>
+                <p class="delete-file-name" id="deleteFileName"></p>
+                <div class="modal-btn-row">
+                    <button type="button" id="cancelDeleteBtn" class="btn btn-secondary">Cancelar</button>
+                    <button type="button" id="confirmDeleteBtn" class="btn btn-danger">Sí, Eliminar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 6. Modal de Estadísticas de Almacenamiento -->
+    <div id="statsModal" class="modal-backdrop hidden">
+        <div class="modal-window stats-window glass-panel">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fa-solid fa-chart-pie"></i> Tu Bóveda en Cifras</h3>
+                <button id="closeStatsBtn" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <div class="stats-overview">
+                    <div class="stat-box">
+                        <span class="stat-number" id="statsTotalFiles">0</span>
+                        <span class="stat-label">Archivos totales</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-number" id="statsTotalSize">0 B</span>
+                        <span class="stat-label">Espacio utilizado</span>
+                    </div>
+                    <div class="stat-box">
+                        <span class="stat-number" id="statsTotalStarred">0</span>
+                        <span class="stat-label">Favoritos ❤️</span>
+                    </div>
+                </div>
+
+                <div class="stats-breakdown">
+                    <h4 class="breakdown-title">Distribución por tipo:</h4>
+                    <div class="breakdown-grid" id="statsBreakdownGrid">
+                        <!-- Inyectado por JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 7. Modal de Ajustes de Conexión de Servidor -->
+    <div id="serverModal" class="modal-backdrop hidden">
+        <div class="modal-window server-window glass-panel">
+            <div class="modal-header">
+                <h3 class="modal-title"><i class="fa-solid fa-sliders"></i> Conexión con el Servidor</h3>
+                <button id="closeServerBtn" class="icon-btn"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="serverConfigForm" class="modal-body">
+                <p class="modal-desc">
+                    Si desplegaste el backend en Render o Railway, puedes configurar o actualizar su dirección pública aquí:
+                </p>
+                <div class="input-group">
+                    <i class="fa-solid fa-globe input-icon"></i>
+                    <input 
+                        type="url" 
+                        id="serverUrlInput" 
+                        placeholder="https://tu-backend.onrender.com"
+                    >
+                </div>
+                <div class="test-connection-row">
+                    <button type="button" id="testServerBtn" class="btn btn-sm btn-outline">
+                        <i class="fa-solid fa-bolt"></i> Probar Conexión
+                    </button>
+                    <span id="testServerStatus" class="test-status-text"></span>
+                </div>
+                <div class="modal-btn-row">
+                    <button type="button" id="resetServerUrlBtn" class="btn btn-secondary">Usar Predeterminado</button>
+                    <button type="submit" class="btn btn-primary">Guardar Dirección</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Contenedor de Notificaciones Flotantes (Toasts) -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Scripts de la Aplicación -->
+    <script src="config.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

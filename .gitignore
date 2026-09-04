@@ -1,0 +1,32 @@
+# Credenciales sensibles de Google Cloud (NUNCA SUBIR A REPOSITORIOS PÚBLICOS)
+credentials.json
+*.json.key
+render_credentials_ready.txt
+oauth_token.json
+client_secret*.json
+render_oauth_ready.txt
+
+# Archivos de entorno y variables locales
+.env
+.env.local
+
+# Entornos virtuales de Python
+venv/
+.venv/
+env/
+ENV/
+
+# Python bytecode y caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log

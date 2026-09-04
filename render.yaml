@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: camila-cloud-backend
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: ACCESS_PASSWORD
+        sync: false
+      - key: DRIVE_FOLDER_ID
+        sync: false
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: "*"
