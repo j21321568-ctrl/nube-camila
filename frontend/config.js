@@ -12,7 +12,7 @@ const CONFIG = {
 
     // URL por defecto para producción (cámbiala por la que te dé Render)
     // Ejemplo: "https://camila-nube-backend.onrender.com"
-    PRODUCTION_BACKEND_URL: "https://camila-nube-backend.onrender.com",
+    PRODUCTION_BACKEND_URL: "https://camila-cloud-backend.onrender.com",
 
     /**
      * Resuelve la URL base del Backend
