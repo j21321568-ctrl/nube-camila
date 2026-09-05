@@ -311,14 +311,29 @@ class ShioriPathTraversalGuard:
 # ──────────────────────────────────────────────────────────────────────────────
 
 class ShioriSecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Añade cabeceras de ciberdefensa proactiva a cada respuesta HTTP."""
+    """Añade cabeceras de ciberdefensa proactiva OWASP a cada respuesta HTTP."""
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
         response.headers["X-Shiori-Protection"] = "v14.0-Sentinel-Active"
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains; preload"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "img-src 'self' data: blob: https://*.googleusercontent.com https://drive.google.com; "
+            "media-src 'self' blob: data:; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
+            "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com data:; "
+            "connect-src 'self' https://*.onrender.com https://*.railway.app http://127.0.0.1:* http://localhost:*; "
+            "frame-src 'self' blob: data:; "
+            "object-src 'none'; "
+            "frame-ancestors 'self'; "
+            "base-uri 'self'; "
+            "form-action 'self';"
+        )
         return response
 
 
