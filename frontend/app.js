@@ -177,7 +177,7 @@
         }
 
         try {
-            const response = await fetch(url, { ...options, headers });
+            const response = await fetch(url, { ...options, headers, credentials: "include" });
             stopColdStartWatch();
 
             if (response.status === 401) {
@@ -199,6 +199,19 @@
             stopColdStartWatch();
             throw err;
         }
+    }
+
+    // ----------------- Generador de Stream URL Seguro (Tokens Efímeros) -----------------
+    async function getFileStreamUrl(fileId) {
+        try {
+            const data = await apiFetch(`/api/files/${fileId}/preview-token`, { method: "POST" });
+            if (data && data.previewUrl) {
+                return CONFIG.apiUrl(data.previewUrl);
+            }
+        } catch (err) {
+            console.warn("Fallo al solicitar token efímero, recurriendo a cookie segura:", err);
+        }
+        return CONFIG.apiUrl(`/api/files/${fileId}/preview`);
     }
 
     // ----------------- Autenticación y Sesión -----------------
@@ -252,7 +265,10 @@
         }
     }
 
-    function logout(message = "Sesión cerrada correctamente") {
+    async function logout(message = "Sesión cerrada correctamente") {
+        try {
+            await fetch(CONFIG.apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" }).catch(() => {});
+        } catch (e) {}
         state.token = null;
         localStorage.removeItem("camila_cloud_token");
         showLockScreen();
@@ -384,8 +400,8 @@
 
             const { icon, color, bg } = getFileCategoryIcon(file.category, file.mimeType);
 
-            // Generar URL de previsualización con token embebido
-            const previewUrl = CONFIG.apiUrl(`/api/files/${file.id}/preview?token=${state.token}`);
+            // URL limpia de previsualización sin exponer token en parámetros (usa cookie HttpOnly)
+            const previewUrl = CONFIG.apiUrl(`/api/files/${file.id}/preview`);
 
             // Previsualización superior (miniatura si es imagen, o icono temático)
             let previewMarkup = "";
@@ -540,16 +556,30 @@
         }
     }
 
-    // ----------------- Descarga de Archivo -----------------
-    function downloadFile(fileId) {
-        const url = CONFIG.apiUrl(`/api/files/${fileId}/download?token=${state.token}`);
+    // ----------------- Descarga de Archivo Segura -----------------
+    async function downloadFile(fileId) {
+        showToast("Iniciando descarga segura...", "info");
+        try {
+            const data = await apiFetch(`/api/files/${fileId}/preview-token`, { method: "POST" });
+            if (data && data.downloadUrl) {
+                const a = document.createElement("a");
+                a.href = CONFIG.apiUrl(data.downloadUrl);
+                a.target = "_blank";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                return;
+            }
+        } catch (err) {
+            console.warn("Fallo al solicitar token efímero de descarga, recurriendo a cookie segura:", err);
+        }
+        const url = CONFIG.apiUrl(`/api/files/${fileId}/download`);
         const a = document.createElement("a");
         a.href = url;
         a.target = "_blank";
         document.body.appendChild(a);
         a.click();
         a.remove();
-        showToast("Iniciando descarga...", "info");
     }
 
     // ----------------- Subida de Archivos con Progreso Real -----------------
@@ -660,8 +690,8 @@
         }
     });
 
-    // ----------------- Visor Multimedia (In-App Lightbox & Player) -----------------
-    function openPreview(index) {
+    // ----------------- Visor Multimedia (In-App Lightbox & Player Seguro) -----------------
+    async function openPreview(index) {
         state.currentPreviewIndex = index;
         const file = state.filteredFiles[index];
         if (!file) return;
@@ -672,11 +702,19 @@
         dom.previewTitle.textContent = file.name;
         dom.previewMeta.textContent = `${file.formattedSize} · Modificado: ${file.relativeDate}`;
 
-        const previewStreamUrl = CONFIG.apiUrl(`/api/files/${file.id}/preview?token=${state.token}`);
-
         // Configurar botón de descarga dentro del visor
         dom.previewDownloadBtn.onclick = () => downloadFile(file.id);
 
+        dom.previewContent.innerHTML = `
+            <div style="text-align: center; padding: 40px;">
+                <div class="spinner-small" style="margin: 0 auto 12px auto; width: 32px; height: 32px;"></div>
+                <p style="color: var(--text-muted); font-size: 0.9rem;">Cargando visor seguro...</p>
+            </div>
+        `;
+        dom.previewModal.classList.remove("hidden");
+
+        // Obtener URL efímera acotada (120s) o utilizar cookie de sesión
+        const previewStreamUrl = await getFileStreamUrl(file.id);
         dom.previewContent.innerHTML = "";
 
         if (file.category === "image") {
@@ -709,7 +747,7 @@
             pre.textContent = "Cargando contenido...";
             dom.previewContent.appendChild(pre);
 
-            fetch(previewStreamUrl)
+            fetch(previewStreamUrl, { credentials: "include" })
                 .then(r => r.text())
                 .then(txt => pre.textContent = txt)
                 .catch(() => pre.textContent = "No se pudo cargar el archivo de texto.");

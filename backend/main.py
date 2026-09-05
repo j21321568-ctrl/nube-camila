@@ -10,13 +10,20 @@ from typing import List, Optional
 from pydantic import BaseModel
 from urllib.parse import quote
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Request, status
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import PORT, HOST, CORS_ORIGINS
-from .auth import verify_password, create_access_token, require_auth
+from .auth import (
+    verify_password,
+    create_access_token,
+    create_scoped_token,
+    require_auth,
+    require_file_access
+)
+from .logging_filter import setup_secure_logging
 from .drive_manager import drive_manager
 from .shiori_guard import (
     ShioriSecurityHeadersMiddleware,
@@ -24,6 +31,9 @@ from .shiori_guard import (
     shiori_entropy,
     shiori_guard
 )
+
+# Inicializar filtro de censura de tokens en logs (previene fuga en Uvicorn/Render)
+setup_secure_logging()
 
 app = FastAPI(
     title="Nube Privada de Camila API",
@@ -68,7 +78,7 @@ def health_check():
 
 # ----------------- Rutas de Autenticación -----------------
 @app.post("/api/auth/login")
-def login(req: LoginRequest, request: Request):
+def login(req: LoginRequest, request: Request, response: Response):
     """Verifica la contraseña maestra con protección contra fuerza bruta de Shiori v14."""
     client_ip = request.client.host if request.client else "127.0.0.1"
     if not shiori_limiter.check_request(client_ip, is_login=True):
@@ -83,12 +93,30 @@ def login(req: LoginRequest, request: Request):
             detail="Contraseña incorrecta. Por favor intenta nuevamente.",
         )
     token = create_access_token(subject="camila")
+    
+    # Inyectar cookie HttpOnly (protege contra XSS y viaja de forma transparente sin exponerse en URL)
+    response.set_cookie(
+        key="camila_session",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=30 * 24 * 60 * 60,
+        path="/"
+    )
+    
     return {
         "success": True,
         "token": token,
         "userName": "Camila",
         "message": "¡Bienvenida a tu espacio seguro, Camila! ✨"
     }
+
+@app.post("/api/auth/logout")
+def logout(response: Response):
+    """Cierra la sesión eliminando la cookie de sesión HttpOnly."""
+    response.delete_cookie(key="camila_session", path="/")
+    return {"success": True, "message": "Sesión cerrada con éxito"}
 
 @app.get("/api/auth/verify")
 def verify_session(user=Depends(require_auth)):
@@ -157,8 +185,24 @@ async def upload_files(
         "totalUploaded": len(uploaded)
     }
 
+@app.post("/api/files/{file_id}/preview-token")
+def get_preview_token(file_id: str, user=Depends(require_auth)):
+    """
+    Genera un token efímero acotado exclusivamente a este file_id (TTL 120s).
+    Permite streaming multimedia o descarga segura sin exponer el token de sesión maestro en URLs ni logs.
+    """
+    scoped_token = create_scoped_token(file_id=file_id, scope="file_access", ttl_seconds=120)
+    return {
+        "success": True,
+        "fileId": file_id,
+        "token": scoped_token,
+        "previewUrl": f"/api/files/{file_id}/preview?token={scoped_token}",
+        "downloadUrl": f"/api/files/{file_id}/download?token={scoped_token}",
+        "expiresIn": 120
+    }
+
 @app.get("/api/files/{file_id}/preview")
-def preview_file(file_id: str, user=Depends(require_auth)):
+def preview_file(file_id: str, user=Depends(require_file_access)):
     """Transmite en línea (inline) el archivo para visualización en navegador (imágenes, audio, video, PDF)."""
     try:
         chunk_gen, meta = drive_manager.stream_file(file_id)
@@ -167,7 +211,7 @@ def preview_file(file_id: str, user=Depends(require_auth)):
 
         headers = {
             "Content-Disposition": f"inline; filename*=UTF-8''{safe_filename}",
-            "Cache-Control": "public, max-age=3600",
+            "Cache-Control": "private, max-age=120",
             "Accept-Ranges": "bytes"
         }
         return StreamingResponse(chunk_gen, media_type=mime_type, headers=headers)
@@ -175,7 +219,7 @@ def preview_file(file_id: str, user=Depends(require_auth)):
         raise HTTPException(status_code=404, detail=f"No se pudo previsualizar el archivo: {str(e)}")
 
 @app.get("/api/files/{file_id}/download")
-def download_file(file_id: str, user=Depends(require_auth)):
+def download_file(file_id: str, user=Depends(require_file_access)):
     """Descarga el archivo forzando guardado como adjunto (attachment)."""
     try:
         chunk_gen, meta = drive_manager.stream_file(file_id)
