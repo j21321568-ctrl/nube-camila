@@ -5,6 +5,8 @@ render_credentials_ready.txt
 oauth_token.json
 client_secret*.json
 render_oauth_ready.txt
+recovery-codes.txt
+Folder-ID.txt
 
 # Archivos de entorno y variables locales
 .env

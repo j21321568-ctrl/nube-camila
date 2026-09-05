@@ -23,11 +23,51 @@ except ImportError:
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
-# 1. Contraseña maestra de acceso
-ACCESS_PASSWORD = os.getenv("ACCESS_PASSWORD", "camila2026")
+# Lista negra de valores por defecto conocidos o comprometidos
+INSECURE_SECRETS_BLACKLIST = {
+    "camila2026",
+    "camila-cloud-super-secure-token-vault-key-2026",
+    "camila-cloud-super-secret-token-vault-2026",
+    "changeme",
+    "admin",
+    "password",
+    "12345678",
+    "secret",
+    "default",
+}
 
-# 2. Clave secreta para firmar tokens de sesión
-SECRET_KEY = os.getenv("SECRET_KEY", "camila-cloud-super-secure-token-vault-key-2026")
+def _require_secret_env(name: str, min_length: int = 16) -> str:
+    """
+    Obtiene una variable de entorno crítica de seguridad aplicando arquitectura Fail-Closed:
+    1. Verifica que la variable esté definida y no esté vacía.
+    2. Exige una longitud mínima segura.
+    3. Rechaza valores predeterminados o comprometidos de la lista negra.
+    Lanza RuntimeError para impedir que el servidor arranque en un estado inseguro.
+    """
+    val = os.getenv(name)
+    if not val or not val.strip():
+        raise RuntimeError(
+            f"❌ ERROR CRÍTICO DE SEGURIDAD (FAIL-CLOSED): Falta definir la variable de entorno obligatoria '{name}'. "
+            f"El servidor no arrancará sin una clave explícita y segura. Define '{name}' en tu archivo .env o en el panel de Render/Railway."
+        )
+    val = val.strip()
+    if len(val) < min_length:
+        raise RuntimeError(
+            f"❌ ERROR CRÍTICO DE SEGURIDAD: La variable '{name}' es demasiado corta ({len(val)} caracteres). "
+            f"Se requiere un mínimo de {min_length} caracteres para garantizar entropía criptográfica adecuada."
+        )
+    if val.lower() in INSECURE_SECRETS_BLACKLIST:
+        raise RuntimeError(
+            f"❌ ERROR CRÍTICO DE SEGURIDAD: La variable '{name}' contiene un valor por defecto inseguro o comprometido ('{val}'). "
+            f"Genera una clave criptográfica segura ejecutando: python tools/generate_secrets.py"
+        )
+    return val
+
+# 1. Contraseña maestra de acceso (Mínimo 12 caracteres, fail-closed)
+ACCESS_PASSWORD = _require_secret_env("ACCESS_PASSWORD", min_length=12)
+
+# 2. Clave secreta para firmar tokens de sesión HMAC-SHA256 (Mínimo 32 caracteres, fail-closed)
+SECRET_KEY = _require_secret_env("SECRET_KEY", min_length=32)
 
 # 3. Puerto y Host
 PORT = int(os.getenv("PORT", 8000))
