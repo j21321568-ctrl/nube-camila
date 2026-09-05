@@ -11,6 +11,7 @@ Folder-ID.txt
 # Archivos de entorno y variables locales
 .env
 .env.local
+.session_epoch
 
 # Entornos virtuales de Python
 venv/

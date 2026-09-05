@@ -21,7 +21,9 @@ from .auth import (
     create_access_token,
     create_scoped_token,
     require_auth,
-    require_file_access
+    require_file_access,
+    revoke_all_sessions,
+    TOKEN_EXPIRATION_SECONDS
 )
 from .logging_filter import setup_secure_logging
 from .drive_manager import drive_manager
@@ -101,13 +103,14 @@ def login(req: LoginRequest, request: Request, response: Response):
         httponly=True,
         secure=True,
         samesite="lax",
-        max_age=30 * 24 * 60 * 60,
+        max_age=TOKEN_EXPIRATION_SECONDS,
         path="/"
     )
     
     return {
         "success": True,
         "token": token,
+        "expiresIn": TOKEN_EXPIRATION_SECONDS,
         "userName": "Camila",
         "message": "¡Bienvenida a tu espacio seguro, Camila! ✨"
     }
@@ -117,6 +120,39 @@ def logout(response: Response):
     """Cierra la sesión eliminando la cookie de sesión HttpOnly."""
     response.delete_cookie(key="camila_session", path="/")
     return {"success": True, "message": "Sesión cerrada con éxito"}
+
+@app.post("/api/auth/refresh")
+def refresh_session(response: Response, user=Depends(require_auth)):
+    """Renovación silenciosa: genera un nuevo token de 8 horas y renueva la cookie de sesión."""
+    new_token = create_access_token(subject=user.get("sub", "camila"))
+    response.set_cookie(
+        key="camila_session",
+        value=new_token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=TOKEN_EXPIRATION_SECONDS,
+        path="/"
+    )
+    return {
+        "success": True,
+        "token": new_token,
+        "expiresIn": TOKEN_EXPIRATION_SECONDS,
+        "message": "Sesión renovada exitosamente ✨"
+    }
+
+@app.post("/api/auth/revoke-all")
+def revoke_all_devices(response: Response, user=Depends(require_auth)):
+    """
+    Revocación global de sesiones (Session Epoch):
+    Invalida instantáneamente todos los tokens de sesión en todos los dispositivos.
+    """
+    revoke_all_sessions()
+    response.delete_cookie(key="camila_session", path="/")
+    return {
+        "success": True,
+        "message": "Se han cerrado y revocado todas las sesiones en todos los dispositivos de manera inmediata."
+    }
 
 @app.get("/api/auth/verify")
 def verify_session(user=Depends(require_auth)):

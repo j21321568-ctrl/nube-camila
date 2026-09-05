@@ -94,6 +94,7 @@
         statsTotalSize: document.getElementById("statsTotalSize"),
         statsTotalStarred: document.getElementById("statsTotalStarred"),
         statsBreakdownGrid: document.getElementById("statsBreakdownGrid"),
+        revokeAllSessionsBtn: document.getElementById("revokeAllSessionsBtn"),
         closeStatsBtn: document.getElementById("closeStatsBtn"),
 
         serverModal: document.getElementById("serverModal"),
@@ -1029,6 +1030,20 @@
         dom.storageStatsBtn.addEventListener("click", openStatsModal);
         dom.closeStatsBtn.addEventListener("click", closeStatsModal);
 
+        if (dom.revokeAllSessionsBtn) {
+            dom.revokeAllSessionsBtn.addEventListener("click", async () => {
+                if (confirm("¿Estás segura de que deseas cerrar sesión en TODOS los dispositivos? Tendrás que ingresar tu contraseña nuevamente.")) {
+                    try {
+                        await apiFetch("/api/auth/revoke-all", { method: "POST" });
+                        showToast("Se han invalidado todas las sesiones.", "success");
+                    } catch (err) {
+                        console.error("Error al revocar sesiones:", err);
+                    }
+                    logout("Has cerrado sesión en todos los dispositivos.");
+                }
+            });
+        }
+
         dom.serverConfigBtn.addEventListener("click", openServerModal);
         dom.openServerSettingsBtn.addEventListener("click", openServerModal);
         dom.closeServerBtn.addEventListener("click", closeServerModal);
@@ -1127,11 +1142,30 @@
         draw();
     }
 
+    // ----------------- Renovación Silenciosa Periódica (Silent Refresh) -----------------
+    function startSilentRefreshTimer() {
+        // Cada 30 minutos comprueba si el usuario sigue activo y renueva el token
+        setInterval(async () => {
+            if (state.token && !dom.appContainer.classList.contains("hidden")) {
+                try {
+                    const data = await apiFetch("/api/auth/refresh", { method: "POST" });
+                    if (data && data.token) {
+                        state.token = data.token;
+                        localStorage.setItem("camila_cloud_token", data.token);
+                    }
+                } catch (e) {
+                    // Si la sesión fue revocada o falló, se cerrará naturalmente en el siguiente apiFetch
+                }
+            }
+        }, 30 * 60 * 1000);
+    }
+
     // ----------------- Inicialización -----------------
     function init() {
         initSentinelBackground();
         initEvents();
         checkExistingSession();
+        startSilentRefreshTimer();
     }
 
     init();
