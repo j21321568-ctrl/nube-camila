@@ -15,6 +15,8 @@ import math
 import hmac
 import hashlib
 import re
+import sqlite3
+from pathlib import Path
 from typing import Dict, Tuple, Optional
 from collections import defaultdict
 from fastapi import Request, HTTPException, status
@@ -68,19 +70,164 @@ class ShioriTokenBucket:
         return False
 
 
-class ShioriRateLimiter:
-    """Gestor de buckets por dirección IP con limpieza periódica."""
-    def __init__(self):
-        self._buckets: Dict[str, ShioriTokenBucket] = defaultdict(
-            lambda: ShioriTokenBucket(capacity=15.0, refill_rate=1.5)
+RATE_LIMIT_DB_FILE = Path(__file__).resolve().parent.parent / ".shiori_ratelimit.db"
+
+class ShioriPersistentRateLimiter:
+    """
+    Rate Limiter persistente de Shiori Sentinel v14 respaldado en SQLite WAL.
+    Garantiza:
+    1. Resistencia multi-worker: Procesos independientes de Uvicorn comparten el mismo estado atómico.
+    2. Resistencia a reinicios y suspensiones de Render: Los intentos fallidos sobreviven a reinicios de proceso.
+    3. Bloqueo progresivo disuasorio: Tras 5 fallos consecutivos, la IP es bloqueada por 15 minutos (900s).
+    4. Reseteo instantáneo tras inicio de sesión exitoso.
+    """
+    MAX_FAILED_ATTEMPTS = 5
+    OBSERVATION_WINDOW_SECONDS = 600   # 10 minutos para acumular fallos
+    LOCKOUT_DURATION_SECONDS = 900     # 15 minutos de bloqueo estricto
+
+    def __init__(self, db_path: Optional[Path] = None):
+        self.db_path = db_path or RATE_LIMIT_DB_FILE
+        self._general_buckets: Dict[str, ShioriTokenBucket] = defaultdict(
+            lambda: ShioriTokenBucket(capacity=20.0, refill_rate=2.0)
         )
-        self._login_buckets: Dict[str, ShioriTokenBucket] = defaultdict(
-            lambda: ShioriTokenBucket(capacity=5.0, refill_rate=0.2)  # Máx 5 intentos login por 25s
-        )
+        self._init_db()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+        return conn
+
+    def _init_db(self):
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS login_rate_limits (
+                        ip TEXT PRIMARY KEY,
+                        failed_count INTEGER NOT NULL DEFAULT 0,
+                        first_failed_at REAL NOT NULL,
+                        last_failed_at REAL NOT NULL,
+                        locked_until REAL NOT NULL DEFAULT 0
+                    );
+                """)
+                conn.commit()
+        except Exception:
+            pass
+
+    def check_login_allowed(self, ip: str) -> Tuple[bool, int]:
+        """
+        Comprueba si la IP tiene permitido intentar login.
+        Devuelve (permitido: bool, segundos_restantes_bloqueo: int).
+        """
+        now = time.time()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT failed_count, last_failed_at, locked_until FROM login_rate_limits WHERE ip = ?",
+                    (ip,)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return True, 0
+
+                failed_count, last_failed_at, locked_until = row
+                
+                # Si está activamente bloqueado
+                if locked_until > now:
+                    remaining = int(locked_until - now) + 1
+                    return False, remaining
+
+                # Si la ventana de observación ya expiró, resetear contador
+                if (now - last_failed_at) > self.OBSERVATION_WINDOW_SECONDS:
+                    cursor.execute(
+                        "UPDATE login_rate_limits SET failed_count = 0, locked_until = 0 WHERE ip = ?",
+                        (ip,)
+                    )
+                    conn.commit()
+                    return True, 0
+
+                return True, 0
+        except Exception:
+            return True, 0
+
+    def record_login_failure(self, ip: str) -> Tuple[int, int]:
+        """
+        Registra un intento de login fallido.
+        Devuelve (failed_count_actual: int, segundos_de_bloqueo_aplicados: int).
+        """
+        now = time.time()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT failed_count, last_failed_at, locked_until FROM login_rate_limits WHERE ip = ?",
+                    (ip,)
+                )
+                row = cursor.fetchone()
+                
+                if not row:
+                    cursor.execute(
+                        "INSERT INTO login_rate_limits (ip, failed_count, first_failed_at, last_failed_at, locked_until) "
+                        "VALUES (?, 1, ?, ?, 0)",
+                        (ip, now, now)
+                    )
+                    conn.commit()
+                    return 1, 0
+                else:
+                    failed_count, last_failed_at, locked_until = row
+                    
+                    if (now - last_failed_at) > self.OBSERVATION_WINDOW_SECONDS:
+                        new_count = 1
+                        new_locked = 0
+                    else:
+                        new_count = failed_count + 1
+                        new_locked = (now + self.LOCKOUT_DURATION_SECONDS) if new_count >= self.MAX_FAILED_ATTEMPTS else 0
+
+                    cursor.execute(
+                        "UPDATE login_rate_limits SET failed_count = ?, last_failed_at = ?, locked_until = ? WHERE ip = ?",
+                        (new_count, now, new_locked, ip)
+                    )
+                    conn.commit()
+                    lockout = self.LOCKOUT_DURATION_SECONDS if new_locked > 0 else 0
+                    return new_count, lockout
+        except Exception:
+            return 1, 0
+
+    def record_login_success(self, ip: str):
+        """Resetea el contador de fallos de la IP tras un inicio de sesión exitoso."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    "UPDATE login_rate_limits SET failed_count = 0, locked_until = 0 WHERE ip = ?",
+                    (ip,)
+                )
+                conn.commit()
+        except Exception:
+            pass
 
     def check_request(self, ip: str, is_login: bool = False) -> bool:
-        bucket = self._login_buckets[ip] if is_login else self._buckets[ip]
+        """Compatibilidad general."""
+        if is_login:
+            allowed, _ = self.check_login_allowed(ip)
+            return allowed
+        bucket = self._general_buckets[ip]
         return bucket.consume(1.0)
+
+# Alias para compatibilidad con código existente
+ShioriRateLimiter = ShioriPersistentRateLimiter
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extrae la IP real del cliente procesada por Uvicorn (--proxy-headers).
+    Normaliza direcciones de loopback local.
+    """
+    if request.client and request.client.host:
+        ip = request.client.host.strip()
+        if ip == "::1":
+            return "127.0.0.1"
+        return ip
+    return "127.0.0.1"
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@ Folder-ID.txt
 .env
 .env.local
 .session_epoch
+.shiori_ratelimit.db*
 
 # Entornos virtuales de Python
 venv/

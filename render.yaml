@@ -3,7 +3,7 @@ services:
     name: camila-cloud-backend
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT --workers 1 --proxy-headers --forwarded-allow-ips="*"
     envVars:
       - key: ACCESS_PASSWORD
         sync: false

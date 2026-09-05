@@ -31,7 +31,8 @@ from .shiori_guard import (
     ShioriSecurityHeadersMiddleware,
     shiori_limiter,
     shiori_entropy,
-    shiori_guard
+    shiori_guard,
+    get_client_ip
 )
 
 # Inicializar filtro de censura de tokens en logs (previene fuga en Uvicorn/Render)
@@ -82,18 +83,34 @@ def health_check():
 @app.post("/api/auth/login")
 def login(req: LoginRequest, request: Request, response: Response):
     """Verifica la contraseña maestra con protección contra fuerza bruta de Shiori v14."""
-    client_ip = request.client.host if request.client else "127.0.0.1"
-    if not shiori_limiter.check_request(client_ip, is_login=True):
+    client_ip = get_client_ip(request)
+    
+    # 1. Comprobar si la IP está bloqueada por exceso de intentos fallidos
+    is_allowed, wait_seconds = shiori_limiter.check_login_allowed(client_ip)
+    if not is_allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Protección Shiori Sentinel: Demasiados intentos continuos. Por seguridad, espera unos segundos.",
+            detail=f"Protección Shiori Sentinel: IP bloqueada temporalmente por reiterados intentos fallidos. Espera {wait_seconds} segundos.",
+            headers={"Retry-After": str(wait_seconds)}
         )
 
+    # 2. Verificar contraseña maestra en tiempo constante
     if not verify_password(req.password):
+        failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
+        if lockout_sec > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Protección Shiori Sentinel: Límite de 5 intentos superado. IP bloqueada por {lockout_sec // 60} minutos.",
+                headers={"Retry-After": str(lockout_sec)}
+            )
+        attempts_left = max(0, 5 - failed_count)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Contraseña incorrecta. Por favor intenta nuevamente.",
+            detail=f"Contraseña incorrecta. Te quedan {attempts_left} intento(s) antes del bloqueo temporal.",
         )
+
+    # 3. Login exitoso: limpiar contador de fallos de la IP
+    shiori_limiter.record_login_success(client_ip)
     token = create_access_token(subject="camila")
     
     # Inyectar cookie HttpOnly (protege contra XSS y viaja de forma transparente sin exponerse en URL)
