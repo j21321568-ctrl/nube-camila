@@ -243,24 +243,78 @@ FORBIDDEN_MAGIC_PREFIXES = [
     (b"#!", "Script ejecutable de Shell"),
 ]
 
+# Lista negra exhaustiva de extensiones ejecutables, scripts y macros (H2)
+DANGEROUS_EXTENSIONS = (
+    ".exe", ".bat", ".cmd", ".ps1", ".vbs", ".sh", ".py", ".php", ".phtml",
+    ".dll", ".so", ".jar", ".msi", ".scr", ".com", ".jse", ".wsf", ".vbe",
+    ".hta", ".lnk", ".js",
+    ".docm", ".xlsm", ".pptm", ".dotm", ".xltm", ".potm",
+)
+
+# MIME types de riesgo para ejecución directa en navegador (Stored XSS)
+DANGEROUS_INLINE_MIMES = {
+    "text/html",
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/xml",
+    "text/xml",
+}
+SAFE_INLINE_PREFIXES = ("image/", "video/", "audio/")
+SAFE_INLINE_EXACT = {"application/pdf"}
+
+def resolve_disposition(mime_type: str, requested: str = "inline") -> str:
+    """
+    Determina si un archivo puede servirse de forma 'inline' de manera segura
+    o si debe forzarse a 'attachment' para prevenir XSS almacenado (ej. SVG, HTML, XML).
+    """
+    if requested == "inline":
+        clean_mime = (mime_type or "").lower().split(";")[0].strip()
+        is_safe = clean_mime.startswith(SAFE_INLINE_PREFIXES) or clean_mime in SAFE_INLINE_EXACT
+        if clean_mime in DANGEROUS_INLINE_MIMES or not is_safe:
+            return "attachment"  # Nunca se renderiza en el navegador de la API
+    return requested
+
+
+# Tamaño máximo de muestra estadística para cálculo de entropía (4 MB)
+MAX_ENTROPY_SCAN_BYTES = 4 * 1024 * 1024
+
+
 class ShioriEntropyShield:
     """Inspección de archivos antes de almacenarse en Google Drive."""
 
     @staticmethod
-    def calculate_shannon_entropy(data: bytes) -> float:
-        """Calcula la entropía de Shannon (0.0 a 8.0 bits por byte)."""
+    def calculate_shannon_entropy(data: bytes, max_bytes: int = MAX_ENTROPY_SCAN_BYTES) -> float:
+        """
+        Calcula la entropía de Shannon (0.0 a 8.0 bits por byte).
+        Acota la muestra a max_bytes (4 MB) para evitar DoS por CPU o memoria.
+        """
         if not data:
             return 0.0
+        sample = data[:max_bytes] if len(data) > max_bytes else data
         entropy = 0.0
-        length = len(data)
+        length = len(sample)
         frequencies = [0] * 256
-        for b in data:
+        for b in sample:
             frequencies[b] += 1
         for count in frequencies:
             if count > 0:
                 p = count / length
                 entropy -= p * math.log2(p)
         return entropy
+
+    @classmethod
+    def scan_file_stream(cls, file_stream, filename: str) -> Tuple[bool, Optional[str]]:
+        """
+        Escanea un flujo de archivo limitando la lectura a MAX_ENTROPY_SCAN_BYTES (4 MB)
+        para análisis de firmas y Magic Bytes sin agotar memoria.
+        """
+        sample = file_stream.read(MAX_ENTROPY_SCAN_BYTES)
+        if hasattr(file_stream, "seek"):
+            try:
+                file_stream.seek(0)
+            except Exception:
+                pass
+        return cls.scan_file_buffer(sample, filename)
 
     @staticmethod
     def scan_file_buffer(buffer: bytes, filename: str) -> Tuple[bool, Optional[str]]:
@@ -269,9 +323,8 @@ class ShioriEntropyShield:
         """
         lower_name = filename.lower()
 
-        # 1. Detección de doble extensión maliciosa (ej. foto.jpg.exe)
-        dangerous_exts = (".exe", ".bat", ".cmd", ".ps1", ".vbs", ".sh", ".py", ".php", ".phtml", ".dll", ".so")
-        for ext in dangerous_exts:
+        # 1. Detección de extensiones maliciosas, scripts y macros (ej. factura.docm, script.js)
+        for ext in DANGEROUS_EXTENSIONS:
             if lower_name.endswith(ext):
                 return False, f"Extensión potencialmente peligrosa bloqueada: {ext}"
 

@@ -32,7 +32,8 @@ from .shiori_guard import (
     shiori_limiter,
     shiori_entropy,
     shiori_guard,
-    get_client_ip
+    get_client_ip,
+    resolve_disposition
 )
 
 # Inicializar filtro de censura de tokens en logs (previene fuga en Uvicorn/Render)
@@ -262,8 +263,9 @@ def preview_file(file_id: str, user=Depends(require_file_access)):
         mime_type = meta.get("mimeType", "application/octet-stream")
         safe_filename = quote(meta.get("name", "archivo"))
 
+        disposition = resolve_disposition(mime_type, requested="inline")
         headers = {
-            "Content-Disposition": f"inline; filename*=UTF-8''{safe_filename}",
+            "Content-Disposition": f"{disposition}; filename*=UTF-8''{safe_filename}",
             "Cache-Control": "private, max-age=120",
             "Accept-Ranges": "bytes"
         }
