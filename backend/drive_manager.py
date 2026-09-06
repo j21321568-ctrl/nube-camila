@@ -18,6 +18,16 @@ from .config import get_service_account_info, get_drive_folder_id, ROOT_DIR
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
 
+def escape_drive_query_value(value: str) -> str:
+    """
+    Escapa caracteres especiales para consultas de la API de Google Drive.
+    IMPORTANTE: La barra invertida debe escaparse PRIMERO para evitar que secuencias
+    como \\' neutralicen el escape de apóstrofes y alteren la cláusula de búsqueda.
+    """
+    if not value:
+        return ""
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
 def format_bytes(size_bytes: Optional[Any]) -> str:
     """Convierte bytes en formato legible (B, KB, MB, GB)."""
     try:
@@ -156,14 +166,14 @@ class DriveManager:
             query_parts.append("starred = true")
 
         if search_query and search_query.strip():
-            safe_q = search_query.strip().replace("'", "\\'")
+            safe_q = escape_drive_query_value(search_query.strip())
             query_parts.append(f"name contains '{safe_q}'")
 
         q = " and ".join(query_parts)
 
         fields = (
             "files(id, name, mimeType, size, modifiedTime, thumbnailLink, "
-            "iconLink, webViewLink, webContentLink, starred)"
+            "iconLink, webViewLink, webContentLink, starred, parents)"
         )
 
         response = self.service.files().list(
@@ -176,9 +186,11 @@ class DriveManager:
         ).execute()
 
         raw_files = response.get("files", [])
+        # Segunda capa de verificación in-memory: Garantizar aislamiento estricto por carpeta
+        isolated_files = [f for f in raw_files if self.folder_id in f.get("parents", [])]
         enriched_files = []
 
-        for f in raw_files:
+        for f in isolated_files:
             mime = f.get("mimeType", "")
             name = f.get("name", "")
             cat = categorize_file(mime, name)
