@@ -130,7 +130,11 @@ def get_drive_folder_id() -> str:
     
     raise RuntimeError("No se encontró el Folder ID de Google Drive. Configura DRIVE_FOLDER_ID en variables de entorno o crea Folder-ID.txt")
 
-# 6. Obtener Credenciales de Cuenta de Servicio
+# 8. Límite máximo de tamaño de subida (Prevención de DoS / OOM - M2)
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
+# 9. Obtener Credenciales de Cuenta de Servicio
 def get_service_account_info() -> dict:
     """
     Carga las credenciales de Google Service Account en orden de prioridad:

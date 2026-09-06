@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import PORT, HOST, CORS_ORIGINS, COOKIE_SAMESITE
+from .config import PORT, HOST, CORS_ORIGINS, COOKIE_SAMESITE, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES
 from .auth import (
     verify_password,
     create_access_token,
@@ -60,6 +60,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Middleware de protección contra DoS / OOM por tamaño de carga (M2)
+@app.middleware("http")
+async def limit_upload_payload_size(request: Request, call_next):
+    """Rechazo temprano por Content-Length antes de parsear multipart o consumir memoria."""
+    if request.method == "POST" and request.url.path == "/api/upload":
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                total_bytes = int(content_length)
+                if total_bytes > MAX_UPLOAD_BYTES:
+                    return JSONResponse(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        content={
+                            "detail": f"El tamaño total de la solicitud ({total_bytes / (1024 * 1024):.1f} MB) excede el límite máximo permitido de {MAX_UPLOAD_MB} MB."
+                        }
+                    )
+            except ValueError:
+                pass
+    return await call_next(request)
 
 # ----------------- Modelos de Datos -----------------
 class LoginRequest(BaseModel):
@@ -216,10 +236,24 @@ def get_files(
 
 @app.post("/api/upload")
 async def upload_files(
+    request: Request,
     files: List[UploadFile] = File(...),
     user=Depends(require_auth)
 ):
-    """Sube archivos con sanitización de ruta y escáner de integridad de Shiori v14."""
+    """Sube archivos con sanitización de ruta, límites de memoria (M2) y escáner de integridad de Shiori v14."""
+    # 1. Validación temprana por Content-Length antes de procesar el cuerpo (M2)
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            total_bytes = int(content_length)
+            if total_bytes > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=f"El tamaño de la solicitud ({total_bytes / (1024 * 1024):.1f} MB) excede el límite máximo permitido de {MAX_UPLOAD_MB} MB."
+                )
+        except ValueError:
+            pass
+
     if not files:
         raise HTTPException(status_code=400, detail="No se recibieron archivos para subir")
 
@@ -228,18 +262,30 @@ async def upload_files(
 
     for file in files:
         try:
-            content = await file.read()
+            # 2. Validación de tamaño individual mediante seek sin volcar en RAM (M2)
+            file.file.seek(0, os.SEEK_END)
+            file_size = file.file.tell()
+            file.file.seek(0)
+
+            if file_size > MAX_UPLOAD_BYTES:
+                errors.append({
+                    "filename": file.filename,
+                    "error": f"El archivo excede el tamaño máximo permitido de {MAX_UPLOAD_MB} MB ({file_size / (1024 * 1024):.1f} MB)"
+                })
+                continue
+
             safe_name = shiori_guard.sanitize_filename(file.filename or "archivo", fallback="archivo_seguro")
 
-            # Escaneo de integridad Shiori Sentinel v14
-            is_safe, scan_reason = shiori_entropy.scan_file_buffer(content, safe_name)
+            # 3. Escaneo de integridad Shiori Sentinel v14 mediante streaming (M2 / H2)
+            # Solo lee hasta 4 MB para firmas / magic bytes, sin cargar el archivo completo en memoria
+            is_safe, scan_reason = shiori_entropy.scan_file_stream(file.file, safe_name)
             if not is_safe:
                 errors.append({"filename": file.filename, "error": scan_reason})
                 continue
 
-            stream = io.BytesIO(content)
+            # 4. Subida a Google Drive pasando el flujo directamente (Streaming sin buffer RAM)
             result = drive_manager.upload_file(
-                file_stream=stream,
+                file_stream=file.file,
                 filename=safe_name,
                 content_type=file.content_type
             )

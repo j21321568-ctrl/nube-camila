@@ -646,8 +646,13 @@
     function uploadFiles(fileList) {
         if (!fileList || fileList.length === 0) return;
 
+        const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB límite (M2)
         const formData = new FormData();
         for (let i = 0; i < fileList.length; i++) {
+            if (fileList[i].size > MAX_FILE_SIZE_BYTES) {
+                showToast(`"${fileList[i].name}" supera el límite máximo permitido de 100 MB.`, "error");
+                return;
+            }
             formData.append("files", fileList[i]);
         }
 
@@ -673,12 +678,19 @@
             if (xhr.status === 200) {
                 try {
                     const res = JSON.parse(xhr.responseText);
-                    showToast(`¡Subida completada! (${res.totalUploaded} archivos)`, "success");
+                    if (res.errors && res.errors.length > 0) {
+                        res.errors.forEach(err => showToast(`Error en ${err.filename}: ${err.error}`, "error"));
+                    }
+                    if (res.totalUploaded > 0) {
+                        showToast(`¡Subida completada! (${res.totalUploaded} archivos)`, "success");
+                    }
                     loadFiles();
                 } catch {
                     showToast("Archivos subidos exitosamente ✨", "success");
                     loadFiles();
                 }
+            } else if (xhr.status === 413) {
+                showToast("El tamaño de los archivos excede el límite permitido (100 MB)", "error");
             } else {
                 showToast(`Error al subir archivos (${xhr.status})`, "error");
             }

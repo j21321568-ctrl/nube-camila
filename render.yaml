@@ -15,3 +15,5 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         value: "https://camila-cloud.vercel.app,https://nube-camila.vercel.app"
+      - key: MAX_UPLOAD_MB
+        value: "100"
