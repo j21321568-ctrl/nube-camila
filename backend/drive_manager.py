@@ -270,7 +270,7 @@ class DriveManager:
         """Obtiene los metadatos de un archivo específico verificando aislamiento estricto."""
         meta = self.service.files().get(
             fileId=file_id,
-            fields="id, name, mimeType, size, modifiedTime, starred, parents",
+            fields="id, name, mimeType, size, modifiedTime, starred, parents, trashed",
             supportsAllDrives=True
         ).execute()
 
@@ -326,9 +326,12 @@ class DriveManager:
         ).execute()
 
     def delete_file(self, file_id: str, permanent: bool = False) -> Dict[str, Any]:
-        """Envía el archivo a la papelera o lo elimina definitivamente tras validar pertenencia."""
-        self.get_file_metadata(file_id)  # Valida aislamiento estricto
+        """Envía el archivo a la papelera o lo elimina definitivamente tras validar pertenencia y flujo seguro."""
+        meta = self.get_file_metadata(file_id)  # Valida aislamiento estricto y obtiene estado de papelera
         if permanent:
+            # Regla H6: Exigir que el archivo ya esté en la papelera antes de permitir la purga definitiva
+            if not meta.get("trashed", False):
+                raise ValueError("Operación rechazada: Un archivo debe estar primero en la papelera (trashed=true) antes de poder eliminarse definitivamente.")
             self.service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
             return {"id": file_id, "deleted": True, "permanent": True}
         else:

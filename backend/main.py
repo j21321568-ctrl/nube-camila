@@ -10,7 +10,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from urllib.parse import quote
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Request, Response, status
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Query, Header, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -66,6 +66,9 @@ class RenameRequest(BaseModel):
 
 class StarRequest(BaseModel):
     starred: bool
+
+class DeleteConfirmRequest(BaseModel):
+    password: Optional[str] = None
 
 # ----------------- Rutas de Salud y Diagnóstico -----------------
 @app.get("/health")
@@ -311,12 +314,38 @@ def rename_file(file_id: str, req: RenameRequest, user=Depends(require_auth)):
 def delete_file(
     file_id: str,
     permanent: bool = Query(False),
+    req: Optional[DeleteConfirmRequest] = None,
+    x_confirm_password: Optional[str] = Header(None),
+    confirm_password: Optional[str] = Query(None),
     user=Depends(require_auth)
 ):
-    """Elimina el archivo (a la papelera por defecto para mayor seguridad)."""
+    """
+    Elimina un archivo de Google Drive.
+    - permanent=False: Envía el archivo a la papelera (reversible y seguro).
+    - permanent=True: Purga permanente con Step-Up Authentication (H6):
+      1. Requiere confirmación con contraseña maestra (vía header, body o query param).
+      2. Exige que el archivo ya se encuentre en la papelera (flujo en 2 pasos obligatorio).
+    """
+    if permanent:
+        pwd = (req.password if req and req.password else None) or x_confirm_password or confirm_password
+        if not pwd:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Step-Up de seguridad requerido: Para purgar un archivo definitivamente debes confirmar con tu contraseña maestra."
+            )
+        if not verify_password(pwd):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Contraseña de confirmación incorrecta. No se autorizó la eliminación permanente."
+            )
+
     try:
         result = drive_manager.delete_file(file_id, permanent=permanent)
         return {"success": True, "result": result}
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except PermissionError as pe:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar archivo: {str(e)}")
 
