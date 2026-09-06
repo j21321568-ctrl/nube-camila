@@ -48,7 +48,8 @@ def main():
         print("pip install google-auth-oauthlib")
         return
 
-    SCOPES = ["https://www.googleapis.com/auth/drive"]
+    # Principio de Mínimo Privilegio (H5): Acotar acceso a solo archivos gestionados por la app
+    SCOPES = [os.getenv("GOOGLE_DRIVE_SCOPE", "https://www.googleapis.com/auth/drive.file").strip()]
     flow = InstalledAppFlow.from_client_secrets_file(str(client_secret_file), SCOPES)
     print("\nAbriendo navegador para autorizar acceso a Google Drive...")
     creds = flow.run_local_server(port=8080)

@@ -14,9 +14,9 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
 
-from .config import get_service_account_info, get_drive_folder_id, ROOT_DIR
+from .config import get_service_account_info, get_drive_folder_id, ROOT_DIR, DRIVE_SCOPES
 
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+SCOPES = DRIVE_SCOPES
 
 def escape_drive_query_value(value: str) -> str:
     """

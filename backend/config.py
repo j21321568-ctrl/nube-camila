@@ -85,7 +85,11 @@ COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower().strip()
 if COOKIE_SAMESITE not in ("lax", "strict", "none"):
     COOKIE_SAMESITE = "lax"
 
-# 6. ID de la Carpeta de Google Drive
+# 6. Scope de permisos de Google Drive (Principio de Mínimo Privilegio - H5)
+# Por defecto 'drive.file': restringe acceso únicamente a archivos gestionados por la app
+DRIVE_SCOPES = [os.getenv("GOOGLE_DRIVE_SCOPE", "https://www.googleapis.com/auth/drive.file").strip()]
+
+# 7. ID de la Carpeta de Google Drive
 def get_drive_folder_id() -> str:
     env_folder = os.getenv("DRIVE_FOLDER_ID")
     if env_folder and env_folder.strip():
