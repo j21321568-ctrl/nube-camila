@@ -80,7 +80,12 @@ if CORS_ORIGINS_ENV.strip() == "*":
 else:
     CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_ENV.split(",") if orig.strip()]
 
-# 5. ID de la Carpeta de Google Drive
+# 5. Configuración de Cookies de Sesión (SameSite: lax, none, strict)
+COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower().strip()
+if COOKIE_SAMESITE not in ("lax", "strict", "none"):
+    COOKIE_SAMESITE = "lax"
+
+# 6. ID de la Carpeta de Google Drive
 def get_drive_folder_id() -> str:
     env_folder = os.getenv("DRIVE_FOLDER_ID")
     if env_folder and env_folder.strip():

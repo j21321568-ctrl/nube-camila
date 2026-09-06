@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import PORT, HOST, CORS_ORIGINS
+from .config import PORT, HOST, CORS_ORIGINS, COOKIE_SAMESITE
 from .auth import (
     verify_password,
     create_access_token,
@@ -120,7 +120,7 @@ def login(req: LoginRequest, request: Request, response: Response):
         value=token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite=COOKIE_SAMESITE,
         max_age=TOKEN_EXPIRATION_SECONDS,
         path="/"
     )
@@ -136,7 +136,7 @@ def login(req: LoginRequest, request: Request, response: Response):
 @app.post("/api/auth/logout")
 def logout(response: Response):
     """Cierra la sesión eliminando la cookie de sesión HttpOnly."""
-    response.delete_cookie(key="camila_session", path="/")
+    response.delete_cookie(key="camila_session", path="/", samesite=COOKIE_SAMESITE, secure=True)
     return {"success": True, "message": "Sesión cerrada con éxito"}
 
 @app.post("/api/auth/refresh")
@@ -148,7 +148,7 @@ def refresh_session(response: Response, user=Depends(require_auth)):
         value=new_token,
         httponly=True,
         secure=True,
-        samesite="lax",
+        samesite=COOKIE_SAMESITE,
         max_age=TOKEN_EXPIRATION_SECONDS,
         path="/"
     )
@@ -166,7 +166,7 @@ def revoke_all_devices(response: Response, user=Depends(require_auth)):
     Invalida instantáneamente todos los tokens de sesión en todos los dispositivos.
     """
     revoke_all_sessions()
-    response.delete_cookie(key="camila_session", path="/")
+    response.delete_cookie(key="camila_session", path="/", samesite=COOKIE_SAMESITE, secure=True)
     return {
         "success": True,
         "message": "Se han cerrado y revocado todas las sesiones en todos los dispositivos de manera inmediata."

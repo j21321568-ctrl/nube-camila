@@ -7,7 +7,9 @@
 (function () {
     // ----------------- Estado de la Aplicación -----------------
     const state = {
-        token: localStorage.getItem("camila_cloud_token") || null,
+        // H4: Nunca almacenar el token en localStorage (protección contra robo vía XSS)
+        token: null,
+        isAuthenticated: false,
         files: [],
         filteredFiles: [],
         activeCategory: "all",
@@ -183,7 +185,7 @@
 
             if (response.status === 401) {
                 // Token vencido o contraseña errónea
-                if (state.token) {
+                if (state.isAuthenticated) {
                     logout("Tu sesión ha expirado. Por favor ingresa nuevamente.");
                 }
                 const errData = await response.json().catch(() => ({}));
@@ -215,22 +217,24 @@
         return CONFIG.apiUrl(`/api/files/${fileId}/preview`);
     }
 
-    // ----------------- Autenticación y Sesión -----------------
+    // ----------------- Autenticación y Sesión (H4: HttpOnly Cookies) -----------------
     async function checkExistingSession() {
-        if (!state.token) {
-            showLockScreen();
-            return;
+        // H4: Validación de sesión persistente delegada a la cookie HttpOnly 'camila_session'
+        try {
+            const data = await apiFetch("/api/auth/verify");
+            if (data && data.valid) {
+                state.isAuthenticated = true;
+                showApp();
+                loadFiles();
+                return;
+            }
+        } catch (err) {
+            // Sin sesión activa o cookie inválida
         }
 
-        try {
-            await apiFetch("/api/auth/verify");
-            showApp();
-            loadFiles();
-        } catch (err) {
-            state.token = null;
-            localStorage.removeItem("camila_cloud_token");
-            showLockScreen();
-        }
+        state.token = null;
+        state.isAuthenticated = false;
+        showLockScreen();
     }
 
     async function handleLogin(e) {
@@ -249,8 +253,10 @@
                 body: JSON.stringify({ password })
             });
 
-            state.token = data.token;
-            localStorage.setItem("camila_cloud_token", data.token);
+            // H4: El backend inyecta la cookie HttpOnly. El token se conserva solo en memoria durante la sesión activa.
+            state.token = data.token || null;
+            state.isAuthenticated = true;
+            try { localStorage.removeItem("camila_cloud_token"); } catch (_) {}
 
             showToast(`¡Bienvenida a tu nube, ${data.userName || "Camila"}! ✨`, "success");
             dom.passwordInput.value = "";
@@ -271,7 +277,8 @@
             await fetch(CONFIG.apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" }).catch(() => {});
         } catch (e) {}
         state.token = null;
-        localStorage.removeItem("camila_cloud_token");
+        state.isAuthenticated = false;
+        try { localStorage.removeItem("camila_cloud_token"); } catch (_) {}
         showLockScreen();
         showToast(message, "info");
     }
@@ -1146,12 +1153,11 @@
     function startSilentRefreshTimer() {
         // Cada 30 minutos comprueba si el usuario sigue activo y renueva el token
         setInterval(async () => {
-            if (state.token && !dom.appContainer.classList.contains("hidden")) {
+            if (state.isAuthenticated && !dom.appContainer.classList.contains("hidden")) {
                 try {
                     const data = await apiFetch("/api/auth/refresh", { method: "POST" });
                     if (data && data.token) {
                         state.token = data.token;
-                        localStorage.setItem("camila_cloud_token", data.token);
                     }
                 } catch (e) {
                     // Si la sesión fue revocada o falló, se cerrará naturalmente en el siguiente apiFetch
@@ -1162,6 +1168,8 @@
 
     // ----------------- Inicialización -----------------
     function init() {
+        // H4: Limpieza preventiva de tokens heredados en localStorage
+        try { localStorage.removeItem("camila_cloud_token"); } catch (_) {}
         initSentinelBackground();
         initEvents();
         checkExistingSession();
