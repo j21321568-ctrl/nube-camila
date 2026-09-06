@@ -45,6 +45,10 @@ app = FastAPI(
     version="2.0.0"
 )
 
+FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
+if not FRONTEND_DIR.exists():
+    FRONTEND_DIR = Path(__file__).resolve().parent.parent / "static"
+
 # Blindaje de cabeceras HTTP de Shiori Sentinel v14
 app.add_middleware(ShioriSecurityHeadersMiddleware)
 
@@ -82,6 +86,14 @@ def health_check():
         "protection": "Shiori Sentinel v14.0",
         "message": "Servidor activo y listo para procesar peticiones ✨"
     }
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """Sirve el favicon oficial de la Nube Privada de Camila."""
+    fav = FRONTEND_DIR / "favicon.ico"
+    if fav.exists():
+        return FileResponse(fav, media_type="image/x-icon")
+    return Response(status_code=204)
 
 # ----------------- Rutas de Autenticación -----------------
 @app.post("/api/auth/login")
@@ -364,10 +376,6 @@ def get_stats(user=Depends(require_auth)):
 
 # ----------------- Servidor de Frontend Estático (Unificado) -----------------
 # Si existe la carpeta frontend/ o static/, se sirve automáticamente para uso local
-FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
-if not FRONTEND_DIR.exists():
-    FRONTEND_DIR = Path(__file__).resolve().parent.parent / "static"
-
 if FRONTEND_DIR.exists():
     # Montar también en /static por compatibilidad
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
