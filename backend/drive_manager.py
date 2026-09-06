@@ -15,6 +15,7 @@ from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
 
 from .config import get_service_account_info, get_drive_folder_id, ROOT_DIR, DRIVE_SCOPES
+from .shiori_guard import ShioriPathTraversalGuard
 
 SCOPES = DRIVE_SCOPES
 
@@ -313,11 +314,11 @@ class DriveManager:
         ).execute()
 
     def rename_file(self, file_id: str, new_name: str) -> Dict[str, Any]:
-        """Renombra un archivo tras verificar pertenencia a la carpeta."""
+        """Renombra un archivo tras verificar pertenencia a la carpeta y sanitizar con Shiori."""
         self.get_file_metadata(file_id)  # Valida aislamiento estricto
-        clean_name = new_name.strip()
+        clean_name = ShioriPathTraversalGuard.sanitize_filename(new_name)
         if not clean_name:
-            raise ValueError("El nombre no puede estar vacío")
+            raise ValueError("El nombre no puede quedar vacío tras sanitizar")
         return self.service.files().update(
             fileId=file_id,
             body={"name": clean_name},

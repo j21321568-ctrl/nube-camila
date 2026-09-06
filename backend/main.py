@@ -217,7 +217,7 @@ async def upload_files(
     for file in files:
         try:
             content = await file.read()
-            safe_name = shiori_guard.sanitize_filename(file.filename or "archivo")
+            safe_name = shiori_guard.sanitize_filename(file.filename or "archivo", fallback="archivo_seguro")
 
             # Escaneo de integridad Shiori Sentinel v14
             is_safe, scan_reason = shiori_entropy.scan_file_buffer(content, safe_name)
@@ -303,10 +303,14 @@ def toggle_star(file_id: str, req: StarRequest, user=Depends(require_auth)):
 
 @app.patch("/api/files/{file_id}/rename")
 def rename_file(file_id: str, req: RenameRequest, user=Depends(require_auth)):
-    """Renombra un archivo en Google Drive."""
+    """Renombra un archivo en Google Drive con sanitización estricta Shiori."""
     try:
         result = drive_manager.rename_file(file_id, req.name)
         return {"success": True, "file": result}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al renombrar archivo: {str(e)}")
 

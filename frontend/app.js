@@ -411,43 +411,74 @@
             // URL limpia de previsualización sin exponer token en parámetros (usa cookie HttpOnly)
             const previewUrl = CONFIG.apiUrl(`/api/files/${file.id}/preview`);
 
-            // Previsualización superior (miniatura si es imagen, o icono temático)
-            let previewMarkup = "";
-            if (file.category === "image") {
-                previewMarkup = `<img class="card-thumbnail-img" src="${previewUrl}" alt="${file.name}" loading="lazy" onerror="this.onerror=null; this.parentElement.innerHTML='<div class=\\'card-icon-wrap\\' style=\\'background: ${bg}; color: ${color};\\'><i class=\\'fa-solid ${icon}\\'></i></div>'">`;
-            } else {
-                previewMarkup = `<div class="card-icon-wrap" style="background: ${bg}; color: ${color};"><i class="fa-solid ${icon}"></i></div>`;
-            }
-
+            // Estructura de plantilla base sin interpolar file.name en innerHTML (Regla H7)
             card.innerHTML = `
                 <div class="card-preview" data-index="${index}">
-                    ${previewMarkup}
+                    ${file.category === "image"
+                        ? `<img class="card-thumbnail-img" src="${previewUrl}" alt="" loading="lazy">`
+                        : `<div class="card-icon-wrap" style="background: ${bg}; color: ${color};"><i class="fa-solid ${icon}"></i></div>`
+                    }
                     <button class="card-star-btn ${file.starred ? 'starred' : ''}" data-id="${file.id}" title="${file.starred ? 'Quitar de favoritos' : 'Agregar a favoritos'}">
                         <i class="fa-${file.starred ? 'solid' : 'regular'} fa-heart"></i>
                     </button>
                 </div>
                 <div class="card-info">
-                    <span class="card-filename" title="${file.name}">${file.name}</span>
+                    <span class="card-filename"></span>
                     <div class="card-meta">
-                        <span>${file.formattedSize}</span>
-                        <span>${file.relativeDate}</span>
+                        <span class="card-meta-size"></span>
+                        <span class="card-meta-date"></span>
                     </div>
                 </div>
                 <div class="card-actions">
                     <button class="action-btn preview-btn" data-index="${index}" title="Previsualizar">
                         <i class="fa-solid fa-eye"></i>
                     </button>
-                    <button class="action-btn download-btn" data-id="${file.id}" data-name="${file.name}" title="Descargar">
+                    <button class="action-btn download-btn" data-id="${file.id}" title="Descargar">
                         <i class="fa-solid fa-download"></i>
                     </button>
-                    <button class="action-btn rename-btn" data-id="${file.id}" data-name="${file.name}" title="Renombrar">
+                    <button class="action-btn rename-btn" data-id="${file.id}" title="Renombrar">
                         <i class="fa-solid fa-pen-to-square"></i>
                     </button>
-                    <button class="action-btn delete-btn" data-id="${file.id}" data-name="${file.name}" title="Eliminar">
+                    <button class="action-btn delete-btn" data-id="${file.id}" title="Eliminar">
                         <i class="fa-solid fa-trash-can"></i>
                     </button>
                 </div>
             `;
+
+            // INSERCIÓN ESTRICTA CON textContent Y PROPIEDADES DOM SEGURAS (Regla H7)
+            const filenameEl = card.querySelector(".card-filename");
+            if (filenameEl) {
+                filenameEl.textContent = file.name;
+                filenameEl.title = file.name;
+            }
+
+            const sizeEl = card.querySelector(".card-meta-size");
+            if (sizeEl) sizeEl.textContent = file.formattedSize || "";
+
+            const dateEl = card.querySelector(".card-meta-date");
+            if (dateEl) dateEl.textContent = file.relativeDate || "";
+
+            // Manejador seguro para fallos de miniatura (sin innerHTML dinámico con datos de usuario)
+            const thumbImg = card.querySelector(".card-thumbnail-img");
+            if (thumbImg) {
+                thumbImg.alt = file.name;
+                thumbImg.onerror = function () {
+                    this.onerror = null;
+                    const wrap = document.createElement("div");
+                    wrap.className = "card-icon-wrap";
+                    wrap.style.background = bg;
+                    wrap.style.color = color;
+                    const ic = document.createElement("i");
+                    ic.className = `fa-solid ${icon}`;
+                    wrap.appendChild(ic);
+                    this.replaceWith(wrap);
+                };
+            }
+
+            // Asignación de data-name mediante propiedad DOM segura
+            card.querySelectorAll(".download-btn, .rename-btn, .delete-btn").forEach(btn => {
+                btn.dataset.name = file.name;
+            });
 
             dom.filesGrid.appendChild(card);
         });
@@ -462,6 +493,7 @@
             const tr = document.createElement("tr");
             const { icon, color } = getFileCategoryIcon(file.category, file.mimeType);
 
+            // Plantilla sin interpolar file.name dentro de innerHTML (Regla H7)
             tr.innerHTML = `
                 <td style="text-align: center;">
                     <button class="card-star-btn ${file.starred ? 'starred' : ''}" data-id="${file.id}" style="position: static; width: 28px; height: 28px;" title="Favorito">
@@ -471,21 +503,41 @@
                 <td>
                     <div class="table-name-cell" data-index="${index}">
                         <i class="fa-solid ${icon} table-file-icon" style="color: ${color};"></i>
-                        <span title="${file.name}">${file.name}</span>
+                        <span class="table-name-text"></span>
                     </div>
                 </td>
-                <td>${file.category.toUpperCase()}</td>
-                <td>${file.formattedSize}</td>
-                <td>${file.relativeDate}</td>
+                <td class="table-category-text"></td>
+                <td class="table-size-text"></td>
+                <td class="table-date-text"></td>
                 <td>
                     <div class="table-actions-cell">
                         <button class="action-btn preview-btn" data-index="${index}" title="Previsualizar"><i class="fa-solid fa-eye"></i></button>
-                        <button class="action-btn download-btn" data-id="${file.id}" data-name="${file.name}" title="Descargar"><i class="fa-solid fa-download"></i></button>
-                        <button class="action-btn rename-btn" data-id="${file.id}" data-name="${file.name}" title="Renombrar"><i class="fa-solid fa-pen-to-square"></i></button>
-                        <button class="action-btn delete-btn" data-id="${file.id}" data-name="${file.name}" title="Eliminar"><i class="fa-solid fa-trash-can"></i></button>
+                        <button class="action-btn download-btn" data-id="${file.id}" title="Descargar"><i class="fa-solid fa-download"></i></button>
+                        <button class="action-btn rename-btn" data-id="${file.id}" title="Renombrar"><i class="fa-solid fa-pen-to-square"></i></button>
+                        <button class="action-btn delete-btn" data-id="${file.id}" title="Eliminar"><i class="fa-solid fa-trash-can"></i></button>
                     </div>
                 </td>
             `;
+
+            // INSERCIÓN ESTRICTA CON textContent (Regla H7)
+            const nameSpan = tr.querySelector(".table-name-text");
+            if (nameSpan) {
+                nameSpan.textContent = file.name;
+                nameSpan.title = file.name;
+            }
+
+            const catTd = tr.querySelector(".table-category-text");
+            if (catTd) catTd.textContent = (file.category || "").toUpperCase();
+
+            const sizeTd = tr.querySelector(".table-size-text");
+            if (sizeTd) sizeTd.textContent = file.formattedSize || "";
+
+            const dateTd = tr.querySelector(".table-date-text");
+            if (dateTd) dateTd.textContent = file.relativeDate || "";
+
+            tr.querySelectorAll(".download-btn, .rename-btn, .delete-btn").forEach(btn => {
+                btn.dataset.name = file.name;
+            });
 
             dom.filesTableBody.appendChild(tr);
         });

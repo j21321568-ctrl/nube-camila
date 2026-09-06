@@ -347,16 +347,21 @@ class ShioriPathTraversalGuard:
     """Previene inyecciones de ruta, caracteres nulos y directory traversal."""
 
     @staticmethod
-    def sanitize_filename(filename: str) -> str:
+    def sanitize_filename(filename: str, fallback: Optional[str] = None) -> str:
         if not filename:
-            return "archivo_seguro"
+            return fallback or ""
         # Eliminar secuencias ../ y ..\\
-        clean = re.sub(r"\.\.[/\\]", "", filename)
+        clean = re.sub(r"(?:\.\.[/\\])+", "", filename)
         # Eliminar caracteres nulos
         clean = clean.replace("\0", "")
         # Dejar solo caracteres seguros para nombres de archivo
         clean = re.sub(r'[<>:"/\\|?*]', "_", clean)
-        return clean.strip() or "archivo_seguro"
+        clean = clean.strip()
+        if clean in (".", ".."):
+            clean = ""
+        if not clean:
+            return fallback or ""
+        return clean
 
 
 # ──────────────────────────────────────────────────────────────────────────────
