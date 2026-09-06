@@ -48,10 +48,10 @@ app = FastAPI(
 # Blindaje de cabeceras HTTP de Shiori Sentinel v14
 app.add_middleware(ShioriSecurityHeadersMiddleware)
 
-# Configurar CORS para permitir comunicación desde Vercel, GitHub Pages, Localhost
+# Configurar CORS restrictivo para permitir comunicación segura desde Vercel y entornos locales (M1)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS if CORS_ORIGINS != ["*"] else ["*"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

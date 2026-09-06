@@ -73,12 +73,31 @@ SECRET_KEY = _require_secret_env("SECRET_KEY", min_length=32)
 PORT = int(os.getenv("PORT", 8000))
 HOST = os.getenv("HOST", "0.0.0.0")
 
-# 4. Orígenes CORS permitidos (Vercel, GitHub Pages, Localhost, etc.)
-CORS_ORIGINS_ENV = os.getenv("CORS_ORIGINS", "*")
-if CORS_ORIGINS_ENV.strip() == "*":
-    CORS_ORIGINS = ["*"]
+# 4. Orígenes CORS permitidos (Vercel, Localhost, etc. - M1)
+# En producción nunca usar "*" ya que los navegadores bloquean cookies de sesión con wildcard.
+DEFAULT_CORS_ORIGINS = [
+    "https://camila-cloud.vercel.app",
+    "https://nube-camila.vercel.app",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:5500",
+    "http://127.0.0.1:5500",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+CORS_ORIGINS_ENV = os.getenv("CORS_ORIGINS")
+if CORS_ORIGINS_ENV and CORS_ORIGINS_ENV.strip():
+    if CORS_ORIGINS_ENV.strip() == "*":
+        import logging
+        logging.getLogger("uvicorn.error").warning(
+            "ADVERTENCIA DE SEGURIDAD (M1): CORS_ORIGINS='*' es inseguro e incompatible con cookies de sesión. Usando orígenes autorizados."
+        )
+        CORS_ORIGINS = DEFAULT_CORS_ORIGINS
+    else:
+        CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_ENV.split(",") if orig.strip()]
 else:
-    CORS_ORIGINS = [orig.strip() for orig in CORS_ORIGINS_ENV.split(",") if orig.strip()]
+    CORS_ORIGINS = DEFAULT_CORS_ORIGINS
 
 # 5. Configuración de Cookies de Sesión (SameSite: lax, none, strict)
 COOKIE_SAMESITE = os.getenv("COOKIE_SAMESITE", "lax").lower().strip()
