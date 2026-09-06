@@ -129,9 +129,15 @@ class DriveManager:
                     from google.oauth2.credentials import Credentials
                     if env_oauth:
                         token_info = json.loads(env_oauth)
-                        creds = Credentials.from_authorized_user_info(token_info, scopes=SCOPES)
+                        token_scopes = token_info.get("scopes") or SCOPES
+                        creds = Credentials.from_authorized_user_info(token_info, scopes=token_scopes)
                     else:
-                        creds = Credentials.from_authorized_user_file(str(oauth_file), scopes=SCOPES)
+                        try:
+                            token_info = json.loads(oauth_file.read_text(encoding="utf-8"))
+                            token_scopes = token_info.get("scopes") or SCOPES
+                        except Exception:
+                            token_scopes = SCOPES
+                        creds = Credentials.from_authorized_user_file(str(oauth_file), scopes=token_scopes)
                     self._service = build("drive", "v3", credentials=creds, cache_discovery=False)
                     return self._service
                 except Exception as e:
