@@ -34,6 +34,7 @@ from .auth import (
     verify_totp_code
 )
 from .logging_filter import setup_secure_logging
+from .audit_logger import shiori_audit
 from .drive_manager import drive_manager
 from .shiori_guard import (
     ShioriSecurityHeadersMiddleware,
@@ -173,6 +174,13 @@ def login(req: LoginRequest, request: Request, response: Response):
     # 1. Comprobar si la IP está bloqueada por exceso de intentos fallidos
     is_allowed, wait_seconds = shiori_limiter.check_login_allowed(client_ip)
     if not is_allowed:
+        shiori_audit.log(
+            event="LOGIN_BLOCKED",
+            level="WARNING",
+            ip=client_ip,
+            actor="anonymous",
+            details={"reason": "ip_temporarily_locked", "wait_seconds": wait_seconds}
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Protección Shiori Sentinel: IP bloqueada temporalmente por reiterados intentos fallidos. Espera {wait_seconds} segundos.",
@@ -207,11 +215,25 @@ def login(req: LoginRequest, request: Request, response: Response):
         if not challenge_passed:
             failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
             if lockout_sec > 0:
+                shiori_audit.log(
+                    event="IP_LOCKOUT",
+                    level="CRITICAL",
+                    ip=client_ip,
+                    actor="anonymous",
+                    details={"reason": "challenge_failures_limit_exceeded", "lockout_seconds": lockout_sec}
+                )
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"Protección Shiori Sentinel: Límite de 5 intentos superado. IP bloqueada por {lockout_sec // 60} minutos.",
                     headers={"Retry-After": str(lockout_sec)}
                 )
+            shiori_audit.log(
+                event="LOGIN_FAIL",
+                level="WARNING",
+                ip=client_ip,
+                actor="anonymous",
+                details={"reason": "challenge_rejected", "challenge_error": challenge_error, "failed_count": failed_count}
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Protección contra ataques distribuidos (M9): {challenge_error}",
@@ -222,12 +244,26 @@ def login(req: LoginRequest, request: Request, response: Response):
     if not verify_password(req.password):
         failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
         if lockout_sec > 0:
+            shiori_audit.log(
+                event="IP_LOCKOUT",
+                level="CRITICAL",
+                ip=client_ip,
+                actor="anonymous",
+                details={"reason": "password_attempts_exceeded", "lockout_seconds": lockout_sec}
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Protección Shiori Sentinel: Límite de 5 intentos superado. IP bloqueada por {lockout_sec // 60} minutos.",
                 headers={"Retry-After": str(lockout_sec)}
             )
         attempts_left = max(0, 5 - failed_count)
+        shiori_audit.log(
+            event="LOGIN_FAIL",
+            level="WARNING",
+            ip=client_ip,
+            actor="anonymous",
+            details={"reason": "invalid_password", "failed_count": failed_count, "attempts_left": attempts_left}
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Contraseña incorrecta. Te quedan {attempts_left} intento(s) antes del bloqueo temporal.",
@@ -236,6 +272,13 @@ def login(req: LoginRequest, request: Request, response: Response):
 
     # 4. Login exitoso: limpiar contador de fallos de la IP
     shiori_limiter.record_login_success(client_ip)
+    shiori_audit.log(
+        event="LOGIN_OK",
+        level="INFO",
+        ip=client_ip,
+        actor="camila",
+        details={"method": "password"}
+    )
     token = create_access_token(subject="camila")
     
     # Inyectar cookie HttpOnly (protege contra XSS y viaja de forma transparente sin exponerse en URL)
@@ -258,8 +301,10 @@ def login(req: LoginRequest, request: Request, response: Response):
     }
 
 @app.post("/api/auth/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
     """Cierra la sesión eliminando la cookie de sesión HttpOnly."""
+    client_ip = get_client_ip(request)
+    shiori_audit.log(event="LOGOUT", level="INFO", ip=client_ip, actor="camila")
     response.delete_cookie(key="camila_session", path="/", samesite=COOKIE_SAMESITE, secure=True)
     return {"success": True, "message": "Sesión cerrada con éxito"}
 
@@ -284,11 +329,19 @@ def refresh_session(response: Response, user=Depends(require_auth)):
     }
 
 @app.post("/api/auth/revoke-all")
-def revoke_all_devices(response: Response, user=Depends(require_auth)):
+def revoke_all_devices(request: Request, response: Response, user=Depends(require_auth)):
     """
     Revocación global de sesiones (Session Epoch):
     Invalida instantáneamente todos los tokens de sesión en todos los dispositivos.
     """
+    client_ip = get_client_ip(request)
+    shiori_audit.log(
+        event="SESSION_REVOKED",
+        level="WARNING",
+        ip=client_ip,
+        actor=user.get("sub", "camila"),
+        details={"action": "revoke_all_sessions"}
+    )
     revoke_all_sessions()
     response.delete_cookie(key="camila_session", path="/", samesite=COOKIE_SAMESITE, secure=True)
     return {
@@ -331,20 +384,35 @@ def setup_2fa(user=Depends(require_auth)):
     }
 
 @app.post("/api/auth/2fa/confirm")
-def confirm_2fa(req: Setup2FaConfirmRequest, user=Depends(require_auth)):
+def confirm_2fa(req: Setup2FaConfirmRequest, request: Request, user=Depends(require_auth)):
     """
     Valida el código de prueba de 6 dígitos introducido por Camila y activa permanentemente el 2FA.
     """
+    client_ip = get_client_ip(request)
     if not req.secret or not req.code:
         raise HTTPException(status_code=400, detail="Faltan datos requeridos (secreto o código)")
 
     if not verify_totp_code(req.code, secret=req.secret):
+        shiori_audit.log(
+            event="2FA_CONFIRM_FAILED",
+            level="WARNING",
+            ip=client_ip,
+            actor=user.get("sub", "camila"),
+            details={"reason": "invalid_verification_code"}
+        )
         raise HTTPException(
             status_code=400,
             detail="El código de 6 dígitos ingresado es incorrecto o ha expirado. Verifica la hora de tu dispositivo e inténtalo nuevamente."
         )
 
     save_2fa_config(req.secret)
+    shiori_audit.log(
+        event="2FA_ENABLED",
+        level="CRITICAL",
+        ip=client_ip,
+        actor=user.get("sub", "camila"),
+        details={"status": "enabled"}
+    )
     return {
         "success": True,
         "enabled": True,
@@ -352,14 +420,29 @@ def confirm_2fa(req: Setup2FaConfirmRequest, user=Depends(require_auth)):
     }
 
 @app.post("/api/auth/2fa/disable")
-def disable_2fa_route(req: Disable2FaRequest, user=Depends(require_auth)):
+def disable_2fa_route(req: Disable2FaRequest, request: Request, user=Depends(require_auth)):
     """Desactiva 2FA previa confirmación obligatoria de la contraseña maestra."""
+    client_ip = get_client_ip(request)
     if not verify_password(req.password):
+        shiori_audit.log(
+            event="2FA_DISABLE_FAILED",
+            level="WARNING",
+            ip=client_ip,
+            actor=user.get("sub", "camila"),
+            details={"reason": "invalid_password"}
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Contraseña incorrecta. No se puede desactivar el segundo factor."
         )
     disable_2fa_config()
+    shiori_audit.log(
+        event="2FA_DISABLED",
+        level="CRITICAL",
+        ip=client_ip,
+        actor=user.get("sub", "camila"),
+        details={"status": "disabled"}
+    )
     return {
         "success": True,
         "enabled": False,
@@ -384,6 +467,13 @@ def login_2fa(req: Login2FaRequest, request: Request, response: Response):
     # 1. Verificar bloqueo por fuerza bruta de IP
     is_allowed, wait_seconds = shiori_limiter.check_login_allowed(client_ip)
     if not is_allowed:
+        shiori_audit.log(
+            event="LOGIN_BLOCKED",
+            level="WARNING",
+            ip=client_ip,
+            actor="anonymous",
+            details={"reason": "ip_temporarily_locked", "wait_seconds": wait_seconds}
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Protección Shiori Sentinel: IP bloqueada temporalmente por reiterados intentos fallidos. Espera {wait_seconds} segundos.",
@@ -394,12 +484,26 @@ def login_2fa(req: Login2FaRequest, request: Request, response: Response):
     if not verify_totp_code(req.totp_code):
         failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
         if lockout_sec > 0:
+            shiori_audit.log(
+                event="IP_LOCKOUT",
+                level="CRITICAL",
+                ip=client_ip,
+                actor="anonymous",
+                details={"reason": "max_2fa_attempts_exceeded", "lockout_seconds": lockout_sec}
+            )
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail=f"Protección Shiori Sentinel: Límite de 5 intentos superado. IP bloqueada por {lockout_sec // 60} minutos.",
                 headers={"Retry-After": str(lockout_sec)}
             )
         attempts_left = max(0, 5 - failed_count)
+        shiori_audit.log(
+            event="LOGIN_FAIL",
+            level="WARNING",
+            ip=client_ip,
+            actor="anonymous",
+            details={"reason": "invalid_totp_code", "failed_count": failed_count, "attempts_left": attempts_left}
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Código 2FA incorrecto o expirado. Te quedan {attempts_left} intento(s) antes del bloqueo temporal."
@@ -407,6 +511,13 @@ def login_2fa(req: Login2FaRequest, request: Request, response: Response):
 
     # 3. Código 2FA válido: limpiar contador de fallos de la IP y emitir sesión
     shiori_limiter.record_login_success(client_ip)
+    shiori_audit.log(
+        event="LOGIN_OK",
+        level="INFO",
+        ip=client_ip,
+        actor="camila",
+        details={"method": "2fa_totp"}
+    )
     token = create_access_token(subject="camila")
 
     response.set_cookie(
@@ -453,12 +564,22 @@ async def upload_files(
     user=Depends(require_auth)
 ):
     """Sube archivos con sanitización de ruta, límites de memoria (M2) y escáner de integridad de Shiori v14."""
+    client_ip = get_client_ip(request)
+    actor_name = user.get("sub", "camila")
+
     # 1. Validación temprana por Content-Length antes de procesar el cuerpo (M2)
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             total_bytes = int(content_length)
             if total_bytes > MAX_UPLOAD_BYTES:
+                shiori_audit.log(
+                    event="SECURITY_BLOCK",
+                    level="WARNING",
+                    ip=client_ip,
+                    actor=actor_name,
+                    details={"reason": "payload_size_exceeded", "bytes": total_bytes, "max_bytes": MAX_UPLOAD_BYTES}
+                )
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     detail=f"El tamaño de la solicitud ({total_bytes / (1024 * 1024):.1f} MB) excede el límite máximo permitido de {MAX_UPLOAD_MB} MB."
@@ -480,6 +601,13 @@ async def upload_files(
             file.file.seek(0)
 
             if file_size > MAX_UPLOAD_BYTES:
+                shiori_audit.log(
+                    event="SECURITY_BLOCK",
+                    level="WARNING",
+                    ip=client_ip,
+                    actor=actor_name,
+                    details={"reason": "file_size_exceeded", "filename": file.filename, "size": file_size}
+                )
                 errors.append({
                     "filename": file.filename,
                     "error": f"El archivo excede el tamaño máximo permitido de {MAX_UPLOAD_MB} MB ({file_size / (1024 * 1024):.1f} MB)"
@@ -492,6 +620,13 @@ async def upload_files(
             # Solo lee hasta 4 MB para firmas / magic bytes, sin cargar el archivo completo en memoria
             is_safe, scan_reason = shiori_entropy.scan_file_stream(file.file, safe_name)
             if not is_safe:
+                shiori_audit.log(
+                    event="SECURITY_BLOCK",
+                    level="WARNING",
+                    ip=client_ip,
+                    actor=actor_name,
+                    details={"reason": scan_reason, "filename": file.filename}
+                )
                 errors.append({"filename": file.filename, "error": scan_reason})
                 continue
 
@@ -500,6 +635,13 @@ async def upload_files(
                 file_stream=file.file,
                 filename=safe_name,
                 content_type=file.content_type
+            )
+            shiori_audit.log(
+                event="FILE_UPLOAD",
+                level="INFO",
+                ip=client_ip,
+                actor=actor_name,
+                details={"file_id": result.get("id"), "filename": safe_name, "size": file_size}
             )
             uploaded.append(result)
         except Exception as e:
@@ -529,12 +671,21 @@ def get_preview_token(file_id: str, user=Depends(require_auth)):
     }
 
 @app.get("/api/files/{file_id}/preview")
-def preview_file(file_id: str, user=Depends(require_file_access)):
+def preview_file(file_id: str, request: Request, user=Depends(require_file_access)):
     """Transmite en línea (inline) el archivo para visualización en navegador (imágenes, audio, video, PDF)."""
     try:
         chunk_gen, meta = drive_manager.stream_file(file_id)
         mime_type = meta.get("mimeType", "application/octet-stream")
         safe_filename = quote(meta.get("name", "archivo"))
+
+        client_ip = get_client_ip(request)
+        shiori_audit.log(
+            event="FILE_PREVIEW",
+            level="INFO",
+            ip=client_ip,
+            actor=user.get("sub", "camila"),
+            details={"file_id": file_id, "name": meta.get("name")}
+        )
 
         disposition = resolve_disposition(mime_type, requested="inline")
         headers = {
@@ -547,12 +698,21 @@ def preview_file(file_id: str, user=Depends(require_file_access)):
         raise HTTPException(status_code=404, detail=f"No se pudo previsualizar el archivo: {str(e)}")
 
 @app.get("/api/files/{file_id}/download")
-def download_file(file_id: str, user=Depends(require_file_access)):
+def download_file(file_id: str, request: Request, user=Depends(require_file_access)):
     """Descarga el archivo forzando guardado como adjunto (attachment)."""
     try:
         chunk_gen, meta = drive_manager.stream_file(file_id)
         mime_type = meta.get("mimeType", "application/octet-stream")
         safe_filename = quote(meta.get("name", "archivo"))
+
+        client_ip = get_client_ip(request)
+        shiori_audit.log(
+            event="FILE_DOWNLOAD",
+            level="INFO",
+            ip=client_ip,
+            actor=user.get("sub", "camila"),
+            details={"file_id": file_id, "name": meta.get("name")}
+        )
 
         headers = {
             "Content-Disposition": f"attachment; filename*=UTF-8''{safe_filename}",
@@ -563,19 +723,35 @@ def download_file(file_id: str, user=Depends(require_file_access)):
         raise HTTPException(status_code=404, detail=f"No se pudo descargar el archivo: {str(e)}")
 
 @app.post("/api/files/{file_id}/star")
-def toggle_star(file_id: str, req: StarRequest, user=Depends(require_auth)):
+def toggle_star(file_id: str, req: StarRequest, request: Request, user=Depends(require_auth)):
     """Marca o desmarca un archivo como favorito en Google Drive."""
     try:
         result = drive_manager.toggle_star(file_id, req.starred)
+        client_ip = get_client_ip(request)
+        shiori_audit.log(
+            event="FILE_STAR",
+            level="INFO",
+            ip=client_ip,
+            actor=user.get("sub", "camila"),
+            details={"file_id": file_id, "starred": req.starred}
+        )
         return {"success": True, "file": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al cambiar favorito: {str(e)}")
 
 @app.patch("/api/files/{file_id}/rename")
-def rename_file(file_id: str, req: RenameRequest, user=Depends(require_auth)):
+def rename_file(file_id: str, req: RenameRequest, request: Request, user=Depends(require_auth)):
     """Renombra un archivo en Google Drive con sanitización estricta Shiori."""
     try:
         result = drive_manager.rename_file(file_id, req.name)
+        client_ip = get_client_ip(request)
+        shiori_audit.log(
+            event="FILE_RENAME",
+            level="INFO",
+            ip=client_ip,
+            actor=user.get("sub", "camila"),
+            details={"file_id": file_id, "new_name": result.get("name", req.name)}
+        )
         return {"success": True, "file": result}
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
@@ -587,6 +763,7 @@ def rename_file(file_id: str, req: RenameRequest, user=Depends(require_auth)):
 @app.delete("/api/files/{file_id}")
 def delete_file(
     file_id: str,
+    request: Request,
     permanent: bool = Query(False),
     req: Optional[DeleteConfirmRequest] = None,
     x_confirm_password: Optional[str] = Header(None),
@@ -600,14 +777,31 @@ def delete_file(
       1. Requiere confirmación con contraseña maestra (vía header, body o query param).
       2. Exige que el archivo ya se encuentre en la papelera (flujo en 2 pasos obligatorio).
     """
+    client_ip = get_client_ip(request)
+    actor_name = user.get("sub", "camila")
+
     if permanent:
         pwd = (req.password if req and req.password else None) or x_confirm_password or confirm_password
         if not pwd:
+            shiori_audit.log(
+                event="PERMANENT_DELETE_REJECTED",
+                level="WARNING",
+                ip=client_ip,
+                actor=actor_name,
+                details={"file_id": file_id, "reason": "missing_stepup_password"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Step-Up de seguridad requerido: Para purgar un archivo definitivamente debes confirmar con tu contraseña maestra."
             )
         if not verify_password(pwd):
+            shiori_audit.log(
+                event="PERMANENT_DELETE_REJECTED",
+                level="CRITICAL",
+                ip=client_ip,
+                actor=actor_name,
+                details={"file_id": file_id, "reason": "invalid_stepup_password"}
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Contraseña de confirmación incorrecta. No se autorizó la eliminación permanente."
@@ -615,6 +809,22 @@ def delete_file(
 
     try:
         result = drive_manager.delete_file(file_id, permanent=permanent)
+        if permanent:
+            shiori_audit.log(
+                event="PERMANENT_DELETE",
+                level="CRITICAL",
+                ip=client_ip,
+                actor=actor_name,
+                details={"file_id": file_id, "status": "purged_permanently"}
+            )
+        else:
+            shiori_audit.log(
+                event="FILE_TRASH",
+                level="INFO",
+                ip=client_ip,
+                actor=actor_name,
+                details={"file_id": file_id, "status": "moved_to_trash"}
+            )
         return {"success": True, "result": result}
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
@@ -622,6 +832,23 @@ def delete_file(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(pe))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar archivo: {str(e)}")
+
+@app.get("/api/audit/logs")
+def get_audit_logs(
+    limit: int = Query(50, ge=1, le=200),
+    min_level: Optional[str] = Query(None),
+    user=Depends(require_auth)
+):
+    """
+    Retorna los eventos de auditoría y ciberdefensa más recientes registrados por Shiori Sentinel (M4).
+    Protegido por autenticación de sesión maestra.
+    """
+    logs = shiori_audit.get_recent_events(limit=limit, min_level=min_level)
+    return {
+        "success": True,
+        "count": len(logs),
+        "logs": logs
+    }
 
 @app.get("/api/stats")
 def get_stats(user=Depends(require_auth)):

@@ -151,6 +151,14 @@ TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
 POW_DIFFICULTY = int(os.getenv("POW_DIFFICULTY", "4"))       # Ceros hexadecimales requeridos (default 4 = 16 bits)
 POW_TTL_SECONDS = int(os.getenv("POW_TTL_SECONDS", "300"))   # Validez del desafío (5 minutos)
 
+# 12. Configuración de Auditoría y Alertas de Seguridad (M4)
+# Permite registrar eventos sensibles en logs estructurados y emitir alertas inmediatas vía Webhook (Discord, Slack, etc.)
+SECURITY_WEBHOOK_URL = os.getenv("SECURITY_WEBHOOK_URL", "").strip()
+SECURITY_ALERT_LEVEL = os.getenv("SECURITY_ALERT_LEVEL", "CRITICAL").upper().strip()
+AUDIT_LOG_FILE = os.getenv("AUDIT_LOG_FILE", str(ROOT_DIR / "logs" / "audit.log")).strip()
+ENABLE_AUDIT_FILE_LOG = os.getenv("ENABLE_AUDIT_FILE_LOG", "true").lower() in ("true", "1", "yes")
+
+
 # 11. Obtener Credenciales de Cuenta de Servicio
 def get_service_account_info() -> dict:
     """

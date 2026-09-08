@@ -222,6 +222,28 @@ Montado como middleware de Starlette/FastAPI, intercepta cada petición saliente
 - `Referrer-Policy: strict-origin-when-cross-origin` (Protege las URLs internas al navegar hacia enlaces externos).
 - `X-XSS-Protection: 1; mode=block` (Activa el filtro proactivo anti-XSS en navegadores legados).
 
+### 3.6 [AUD] Subsistema de Auditoría Inmutable y Alertas en Tiempo Real (`audit_logger.py` - M4)
+Ubicación del archivo: [`backend/audit_logger.py`](file:///c:/Cloud/backend/audit_logger.py)
+
+Provee trazabilidad forense completa y emisión de alertas proactivas ante anomalías o acciones destructivas:
+1. **Catálogo de Eventos Normalizados**:
+   - `LOGIN_OK` (INFO): Acceso exitoso vía contraseña o código de respaldo 2FA.
+   - `LOGIN_FAIL` (WARNING): Contraseña inválida o fallo de desafío PoW.
+   - `IP_LOCKOUT` (CRITICAL): Bloqueo preventivo por superación de 5 intentos fallidos.
+   - `LOGOUT` / `SESSION_REVOKED` (INFO / WARNING): Cierre o revocación global de sesiones.
+   - `2FA_ENABLED` / `2FA_DISABLED` (CRITICAL): Activación o baja del segundo factor de autenticación.
+   - `FILE_UPLOAD` / `FILE_RENAME` / `FILE_STAR` (INFO): Ciclo de vida y mutación de archivos.
+   - `FILE_TRASH` (INFO) vs `PERMANENT_DELETE` (CRITICAL): Distinción estricta de borrado seguro en papelera vs purga definitiva.
+   - `SECURITY_BLOCK` (WARNING): Intentos de subida bloqueados por escaneo de entropía, extensión o tamaño.
+2. **Cero Fuga de Secretos (Zero-Leakage Sanitization)**:
+   El módulo aplica `sanitize_audit_payload()` recursivamente sobre todo diccionario de detalles antes de escribir a disco o memoria, sustituyendo automáticamente por `[REDACTED]` cualquier clave como `password`, `token`, `secret`, `totp_code`, `code` o `cookie`.
+3. **Persistencia y Rotación Segura**:
+   Implementa `RotatingFileHandler` con archivos de hasta 10 MB y 5 rotaciones históricas codificadas en UTF-8 (`logs/audit.log`).
+4. **Despacho Resiliente a Webhook (Discord / Slack / Telegram)**:
+   Si se configura `SECURITY_WEBHOOK_URL`, cualquier evento con severidad `CRITICAL` (como `IP_LOCKOUT`, `PERMANENT_DELETE` o `2FA_DISABLED`) genera una alerta enriquecida con Embeds enviada en un hilo de fondo (non-blocking) con timeout de 3.5s y protección integral contra caídas de red.
+5. **Endpoint de Consulta Forense**:
+   `GET /api/audit/logs` permite consultar el buffer circular en memoria en tiempo real, restringido exclusivamente a sesiones autenticadas.
+
 ---
 
 ## 4. Mecanismo Criptográfico y Gestión de Sesiones (`auth.py`)
