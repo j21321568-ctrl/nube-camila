@@ -1,0 +1,61 @@
+# ─── Nube Privada de Camila — Pipeline de Seguridad Automatizado (M5) ───
+# Ejecuta pip-audit (vulnerabilidades conocidas en dependencias)
+# y bandit (análisis estático de seguridad del código Python)
+# en cada push y pull request.
+
+name: Security Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  audit:
+    name: "🛡️ Auditoría de Dependencias y Código"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Instalar dependencias del proyecto
+        run: pip install -r requirements.txt
+
+      - name: Instalar herramientas de auditoría
+        run: pip install pip-audit bandit
+
+      - name: "🔍 pip-audit — Escaneo de vulnerabilidades conocidas (CVE)"
+        run: pip-audit --strict --desc
+
+      - name: "🔍 bandit — Análisis estático de seguridad del código"
+        run: bandit -r backend/ -ll -ii --format json --output bandit-report.json || true
+
+      - name: "📊 Mostrar reporte de bandit"
+        if: always()
+        run: |
+          if [ -f bandit-report.json ]; then
+            python -c "
+          import json
+          with open('bandit-report.json') as f:
+              report = json.load(f)
+          results = report.get('results', [])
+          if results:
+              print(f'⚠️  bandit encontró {len(results)} hallazgo(s):')
+              for r in results:
+                  sev = r.get('issue_severity', '?')
+                  conf = r.get('issue_confidence', '?')
+                  text = r.get('issue_text', '?')
+                  loc = r.get('filename', '?') + ':' + str(r.get('line_number', '?'))
+                  print(f'  [{sev}/{conf}] {loc} — {text}')
+          else:
+              print('✅ bandit: Sin hallazgos de seguridad.')
+          "
+          fi
