@@ -164,6 +164,17 @@ $$\text{Tokens}_{\text{actuales}} = \min\left(\text{Capacidad}, \text{Tokens}_{\
      - Tasa de recarga: `0.2` tokens por segundo ($1\text{ ficha cada }5\text{ segundos}$).
      - Si un atacante intenta realizar ataques de diccionario contra `/api/auth/login`, agotará las 5 fichas en menos de un segundo y recibirá respuestas HTTP `429 Too Many Requests` durante los siguientes periodos de recarga.
 
+#### 3.2.1 Extracción Segura de IP y Blindaje Anti-Spoofing (`get_client_ip` — M8)
+Para evitar que un atacante evada el bloqueo por IP manipulando la cabecera `X-Forwarded-For` o inyectando cabeceras falsificadas:
+- **Detección de Entorno de Proxy**: Controlado por `TRUST_PROXY_HEADERS` (activado automáticamente en Render mediante `RENDER=true`).
+- **En entorno de proxy de confianza (Producción Render / Cloudflare)**:
+  1. Prioridad 1: `CF-Connecting-IP` (sobreescrita en el edge por Cloudflare; un atacante no puede manipularla).
+  2. Prioridad 2: `X-Real-IP`.
+  3. Prioridad 3: `X-Forwarded-For` analizado estrictamente de **derecha a izquierda**, descartando proxies internos e impidiendo evasión mediante spoofing en el extremo izquierdo.
+- **En entorno directo / desarrollo local**:
+  Las cabeceras de proxy se ignoran por completo y se utiliza el socket de conexión directo (`request.client.host`), bloqueando cualquier intento de falsificación.
+- **Validación Estricta**: Todas las IPs se validan sintácticamente con `ipaddress`, descartando inyecciones y normalizando IPv6 `::1` a `127.0.0.1`.
+
 ### 3.3 [ENT] Entropy Shield y Análisis de Magic Bytes (`ShioriEntropyShield`)
 
 #### 3.3.1 Cálculo de la Entropía de Shannon

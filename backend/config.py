@@ -136,7 +136,15 @@ def get_drive_folder_id() -> str:
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
-# 9. Obtener Credenciales de Cuenta de Servicio
+# 9. Configuración de Detección de IP y Confianza de Proxies (M8)
+# RENDER=true se activa automáticamente en la infraestructura de Render.
+# Cuando TRUST_PROXY_HEADERS está activo, se procesan cabeceras de proxy seguras
+# (CF-Connecting-IP de Cloudflare Edge o X-Forwarded-For analizado de derecha a izquierda).
+# Cuando está inactivo (desarrollo local / sin proxy), se usa el socket directo para evitar spoofing.
+IS_RENDER = os.getenv("RENDER", "").lower() in ("true", "1", "yes")
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "").lower() in ("true", "1", "yes") or IS_RENDER
+
+# 10. Obtener Credenciales de Cuenta de Servicio
 def get_service_account_info() -> dict:
     """
     Carga las credenciales de Google Service Account en orden de prioridad:

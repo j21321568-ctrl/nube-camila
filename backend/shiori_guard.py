@@ -217,17 +217,99 @@ class ShioriPersistentRateLimiter:
 # Alias para compatibilidad con código existente
 ShioriRateLimiter = ShioriPersistentRateLimiter
 
+import ipaddress
+
+# Redes privadas / reservadas que suelen pertenecer a proxies inversos internos o loopback
+PRIVATE_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),   # Carrier-grade NAT (infraestructuras cloud)
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),       # Unique local IPv6
+    ipaddress.ip_network("fe80::/10"),      # Link-local IPv6
+)
+
+def _is_private_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Comprueba si una dirección IP pertenece a rangos de red privados o de loopback."""
+    return any(ip_obj in net for net in PRIVATE_NETWORKS)
+
+def _clean_ip_str(raw: Optional[str]) -> Optional[str]:
+    """Valida sintácticamente y normaliza una dirección IP textual usando ipaddress."""
+    if not isinstance(raw, str):
+        return None
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        ip_obj = ipaddress.ip_address(raw)
+        if ip_obj.version == 6 and ip_obj == ipaddress.IPv6Address("::1"):
+            return "127.0.0.1"
+        return str(ip_obj)
+    except ValueError:
+        return None
+
 def get_client_ip(request: Request) -> str:
     """
-    Extrae la IP real del cliente procesada por Uvicorn (--proxy-headers).
-    Normaliza direcciones de loopback local.
+    Extrae de forma segura la dirección IP real del cliente para rate limiting (M8).
+    
+    Arquitectura de defensa contra spoofing de cabeceras de proxy:
+    1. Si TRUST_PROXY_HEADERS está activo (ej. en producción Render detrás de Cloudflare):
+       a. Prioridad 1: 'CF-Connecting-IP'. Cloudflare sobreescribe esta cabecera en el edge
+          con la IP remota real del visitante; un atacante no puede falsificarla.
+       b. Prioridad 2: 'X-Real-IP'. Inyectada por proxies inversos de confianza.
+       c. Prioridad 3: 'X-Forwarded-For'. Se analiza de DERECHA a IZQUIERDA (el extremo
+          izquierdo puede haber sido inyectado por el cliente, mientras que los extremos
+          derechos son añadidos por los proxies de confianza). Se extrae la primera IP
+          pública o válida de derecha a izquierda.
+    2. Si TRUST_PROXY_HEADERS está inactivo (desarrollo local o conexión directa sin proxy):
+       Se utiliza exclusivamente el socket remoto de la conexión (`request.client.host`),
+       impidiendo que un cliente envíe cabeceras de proxy falsas para evadir el rate limit.
     """
-    if request.client and request.client.host:
-        ip = request.client.host.strip()
-        if ip == "::1":
-            return "127.0.0.1"
-        return ip
+    from .config import TRUST_PROXY_HEADERS
+
+    if TRUST_PROXY_HEADERS and hasattr(request, "headers"):
+        headers = request.headers
+
+        # 1. CF-Connecting-IP (Cloudflare Edge — Render usa Cloudflare como proxy)
+        cf_ip = _clean_ip_str(headers.get("cf-connecting-ip"))
+        if cf_ip:
+            return cf_ip
+
+        # 2. X-Real-IP
+        real_ip = _clean_ip_str(headers.get("x-real-ip"))
+        if real_ip:
+            return real_ip
+
+        # 3. X-Forwarded-For (analizar de derecha a izquierda contra inyecciones)
+        xff = headers.get("x-forwarded-for")
+        if xff:
+            parts = [p.strip() for p in xff.split(",") if p.strip()]
+            valid_ips = []
+            for part in reversed(parts):
+                cleaned = _clean_ip_str(part)
+                if cleaned:
+                    valid_ips.append(cleaned)
+
+            if valid_ips:
+                # Buscar la primera IP de derecha a izquierda que no sea proxy privado
+                for ip_str in valid_ips:
+                    ip_obj = ipaddress.ip_address(ip_str)
+                    if not _is_private_ip(ip_obj):
+                        return ip_str
+                # Si todas son privadas (ej. red interna), tomar la más reciente (extremo derecho)
+                return valid_ips[0]
+
+    # Conexión directa / fallback de socket
+    if hasattr(request, "client") and request.client and getattr(request.client, "host", None):
+        direct_ip = _clean_ip_str(request.client.host)
+        if direct_ip:
+            return direct_ip
+
     return "127.0.0.1"
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
