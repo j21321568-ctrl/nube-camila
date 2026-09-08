@@ -61,7 +61,7 @@ def _base64url_decode(data_str: str) -> bytes:
 
 def _get_password_fingerprint() -> str:
     """Genera una huella criptográfica de 16 caracteres de la contraseña maestra activa."""
-    return hashlib.sha256(ACCESS_PASSWORD.strip().encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha3_256(ACCESS_PASSWORD.strip().encode("utf-8")).hexdigest()[:16]
 
 def get_session_epoch() -> int:
     """
@@ -102,7 +102,7 @@ def verify_password(plain_password: str) -> bool:
     return hmac.compare_digest(plain_password.strip(), ACCESS_PASSWORD.strip())
 
 def create_access_token(subject: str = "camila") -> str:
-    """Crea un token de sesión maestro firmado con HMAC-SHA256 (Vigencia: 8 horas)."""
+    """Crea un token de sesión maestro firmado con HMAC-SHA3-256 (Vigencia: 8 horas)."""
     now = int(time.time())
     payload = {
         "sub": subject,
@@ -117,7 +117,7 @@ def create_access_token(subject: str = "camila") -> str:
     signature = hmac.new(
         SECRET_KEY.encode("utf-8"),
         payload_b64.encode("utf-8"),
-        hashlib.sha256
+        hashlib.sha3_256
     ).digest()
     sig_b64 = _base64url_encode(signature)
     
@@ -144,7 +144,7 @@ def create_scoped_token(file_id: str, scope: str = "file_access", ttl_seconds: i
     signature = hmac.new(
         SECRET_KEY.encode("utf-8"),
         payload_b64.encode("utf-8"),
-        hashlib.sha256
+        hashlib.sha3_256
     ).digest()
     sig_b64 = _base64url_encode(signature)
     
@@ -164,7 +164,7 @@ def verify_token(token: str) -> dict:
         expected_sig = hmac.new(
             SECRET_KEY.encode("utf-8"),
             payload_b64.encode("utf-8"),
-            hashlib.sha256
+            hashlib.sha3_256
         ).digest()
         
         expected_sig_b64 = _base64url_encode(expected_sig)
