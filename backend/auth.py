@@ -9,16 +9,38 @@ Implementa:
 - Blindaje contra filtraciones: Rechazo de tokens de sesión maestros en URLs.
 """
 import os
+import io
 import time
 import json
 import base64
 import hmac
 import hashlib
+import struct
+import secrets
 from pathlib import Path
 from typing import Optional
 from fastapi import HTTPException, Header, Query, Request, status
 
-from .config import ACCESS_PASSWORD, SECRET_KEY, ROOT_DIR
+try:
+    import pyotp
+except ImportError:
+    pyotp = None
+
+try:
+    import qrcode
+    import qrcode.image.svg
+except ImportError:
+    qrcode = None
+
+from .config import (
+    ACCESS_PASSWORD,
+    SECRET_KEY,
+    ROOT_DIR,
+    get_totp_secret,
+    is_2fa_enabled,
+    save_2fa_config,
+    disable_2fa_config
+)
 
 # Duración del token de sesión: 8 horas (en segundos)
 TOKEN_EXPIRATION_SECONDS = 8 * 60 * 60
@@ -294,3 +316,109 @@ def require_file_access(
         detail="Se requiere sesión activa o token efímero para acceder a este archivo",
         headers={"WWW-Authenticate": "Bearer"},
     )
+
+
+# ==============================================================================
+# SEGUNDO FACTOR DE AUTENTICACIÓN (2FA / TOTP RFC 6238 - M3)
+# ==============================================================================
+
+def generate_new_totp_secret() -> str:
+    """Genera una nueva clave secreta Base32 segura de alta entropía (160 bits)."""
+    if pyotp:
+        return pyotp.random_base32(length=32)
+    # Generador nativo seguro de 32 caracteres Base32 [A-Z2-7]
+    base32_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    return "".join(secrets.choice(base32_alphabet) for _ in range(32))
+
+def get_totp_uri(secret: str, account_name: str = "Camila") -> str:
+    """Genera el URI estándar otpauth:// para vincular apps de autenticación móvil."""
+    if pyotp:
+        return pyotp.totp.TOTP(secret).provisioning_uri(
+            name=account_name,
+            issuer_name="Nube Privada de Camila"
+        )
+    return (
+        f"otpauth://totp/Nube%20Privada%20de%20Camila:{account_name}"
+        f"?secret={secret}&issuer=Nube%20Privada%20de%20Camila&algorithm=SHA1&digits=6&period=30"
+    )
+
+def generate_qr_svg_data_uri(otpauth_url: str) -> str:
+    """
+    Genera un código QR nítido en formato SVG Data URI (data:image/svg+xml;base64,...).
+    No requiere llamadas externas y es totalmente compatible con la política CSP estricta.
+    """
+    if not qrcode:
+        raise RuntimeError("El módulo 'qrcode' es requerido para generar el código QR visual.")
+    
+    factory = qrcode.image.svg.SvgPathImage
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=10,
+        border=2,
+        image_factory=factory
+    )
+    qr.add_data(otpauth_url)
+    qr.make(fit=True)
+    img = qr.make_image()
+    
+    stream = io.BytesIO()
+    img.save(stream)
+    svg_bytes = stream.getvalue()
+    b64_svg = base64.b64encode(svg_bytes).decode("utf-8")
+    return f"data:image/svg+xml;base64,{b64_svg}"
+
+def _generate_totp_code_rfc6238(secret_b32: str, for_time: Optional[int] = None, interval: int = 30) -> str:
+    """Cálculo nativo de TOTP según especificación RFC 6238 con HMAC-SHA1."""
+    if for_time is None:
+        for_time = int(time.time())
+    counter = for_time // interval
+    
+    clean_secret = secret_b32.strip().replace(" ", "").upper()
+    missing_padding = len(clean_secret) % 8
+    if missing_padding:
+        clean_secret += "=" * (8 - missing_padding)
+        
+    key = base64.b32decode(clean_secret, casefold=True)
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code_int = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return f"{code_int % 1000000:06d}"
+
+def verify_totp_code(code: str, secret: Optional[str] = None, valid_window: int = 1) -> bool:
+    """
+    Valida un código de autenticación de 6 dígitos con ventana de tolerancia (±30 segundos).
+    Si 'secret' no se especifica, utiliza la clave guardada en la configuración del servidor.
+    Compara en tiempo constante para mitigar ataques de temporización.
+    """
+    if not code:
+        return False
+    
+    code_clean = "".join(filter(str.isdigit, str(code).strip()))
+    if len(code_clean) != 6:
+        return False
+        
+    active_secret = secret or get_totp_secret()
+    if not active_secret:
+        return False
+        
+    # Método 1: pyotp si está instalado
+    if pyotp:
+        try:
+            totp = pyotp.TOTP(active_secret)
+            return bool(totp.verify(code_clean, valid_window=valid_window))
+        except Exception:
+            pass
+
+    # Método 2: Cálculo nativo estándar RFC 6238
+    try:
+        now = int(time.time())
+        for offset in range(-valid_window, valid_window + 1):
+            expected = _generate_totp_code_rfc6238(active_secret, for_time=now + offset * 30)
+            if hmac.compare_digest(code_clean, expected):
+                return True
+    except Exception:
+        pass
+        
+    return False

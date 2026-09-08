@@ -13,6 +13,7 @@ Folder-ID.txt
 .env.local
 .session_epoch
 .shiori_ratelimit.db*
+.shiori_2fa.json
 
 # Entornos virtuales de Python
 venv/

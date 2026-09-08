@@ -18,7 +18,9 @@
         viewMode: localStorage.getItem("camila_cloud_view") || "grid",
         currentPreviewIndex: -1,
         activeFileForAction: null,
-        coldStartTimer: null
+        coldStartTimer: null,
+        twoFactorActive: false,
+        pending2FaSecret: null
     };
 
     // ----------------- Referencias del DOM -----------------
@@ -36,14 +38,29 @@
         loginErrorText: document.getElementById("loginErrorText"),
         unlockBtn: document.getElementById("unlockBtn"),
 
+        // Rescate 2FA
+        show2FaRescueBtn: document.getElementById("show2FaRescueBtn"),
+        login2FaForm: document.getElementById("login2FaForm"),
+        totpRescueInput: document.getElementById("totpRescueInput"),
+        login2FaError: document.getElementById("login2FaError"),
+        login2FaErrorText: document.getElementById("login2FaErrorText"),
+        unlock2FaBtn: document.getElementById("unlock2FaBtn"),
+        backToPasswordBtn: document.getElementById("backToPasswordBtn"),
+
         // Navegación
         greetingText: document.getElementById("greetingText"),
         searchInput: document.getElementById("searchInput"),
         clearSearchBtn: document.getElementById("clearSearchBtn"),
         storageStatsBtn: document.getElementById("storageStatsBtn"),
+        security2FaBtn: document.getElementById("security2FaBtn"),
         serverConfigBtn: document.getElementById("serverConfigBtn"),
         openServerSettingsBtn: document.getElementById("openServerSettingsBtn"),
         logoutBtn: document.getElementById("logoutBtn"),
+
+        // Banner Dinámico 2FA
+        setup2FaBanner: document.getElementById("setup2FaBanner"),
+        open2FaSetupBtn: document.getElementById("open2FaSetupBtn"),
+        dismiss2FaBannerBtn: document.getElementById("dismiss2FaBannerBtn"),
 
         // Filtros y Vista
         catPills: document.querySelectorAll(".cat-pill"),
@@ -106,6 +123,21 @@
         testServerStatus: document.getElementById("testServerStatus"),
         resetServerUrlBtn: document.getElementById("resetServerUrlBtn"),
         closeServerBtn: document.getElementById("closeServerBtn"),
+
+        // Modal 2FA
+        twoFactorModal: document.getElementById("twoFactorModal"),
+        close2FaModalBtn: document.getElementById("close2FaModalBtn"),
+        twoFactorSetupView: document.getElementById("twoFactorSetupView"),
+        twoFactorActiveView: document.getElementById("twoFactorActiveView"),
+        twoFactorQrImg: document.getElementById("twoFactorQrImg"),
+        twoFactorSecretText: document.getElementById("twoFactorSecretText"),
+        copySecretBtn: document.getElementById("copySecretBtn"),
+        confirm2FaForm: document.getElementById("confirm2FaForm"),
+        confirm2FaInput: document.getElementById("confirm2FaInput"),
+        confirm2FaError: document.getElementById("confirm2FaError"),
+        confirm2FaErrorText: document.getElementById("confirm2FaErrorText"),
+        save2FaBtn: document.getElementById("save2FaBtn"),
+        disable2FaBtn: document.getElementById("disable2FaBtn"),
 
         toastContainer: document.getElementById("toastContainer")
     };
@@ -224,8 +256,10 @@
             const data = await apiFetch("/api/auth/verify");
             if (data && data.valid) {
                 state.isAuthenticated = true;
+                state.twoFactorActive = !!data.twoFactorEnabled;
                 showApp();
                 loadFiles();
+                check2FaStatus();
                 return;
             }
         } catch (err) {
@@ -262,6 +296,7 @@
             dom.passwordInput.value = "";
             showApp();
             loadFiles();
+            check2FaStatus();
         } catch (err) {
             dom.loginErrorText.textContent = err.message || "Contraseña incorrecta";
             dom.loginError.classList.remove("hidden");
@@ -269,6 +304,148 @@
         } finally {
             dom.unlockBtn.disabled = false;
             dom.unlockBtn.innerHTML = `<span>Desbloquear Mi Nube</span><i class="fa-solid fa-arrow-right"></i>`;
+        }
+    }
+
+    async function handle2FaLogin(e) {
+        e.preventDefault();
+        const code = (dom.totpRescueInput.value || "").trim();
+        if (!code) return;
+
+        dom.unlock2FaBtn.disabled = true;
+        dom.unlock2FaBtn.innerHTML = `<span>Verificando 2FA...</span><div class="spinner-small"></div>`;
+        dom.login2FaError.classList.add("hidden");
+
+        try {
+            const data = await apiFetch("/api/auth/login-2fa", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ totp_code: code })
+            });
+
+            state.token = data.token || null;
+            state.isAuthenticated = true;
+            try { localStorage.removeItem("camila_cloud_token"); } catch (_) {}
+
+            showToast(`¡Acceso de respaldo concedido! Bienvenida ✨`, "success");
+            dom.totpRescueInput.value = "";
+            dom.login2FaForm.classList.add("hidden");
+            dom.loginForm.classList.remove("hidden");
+            showApp();
+            loadFiles();
+            check2FaStatus();
+        } catch (err) {
+            dom.login2FaErrorText.textContent = err.message || "Código 2FA incorrecto o expirado";
+            dom.login2FaError.classList.remove("hidden");
+            dom.totpRescueInput.focus();
+        } finally {
+            dom.unlock2FaBtn.disabled = false;
+            dom.unlock2FaBtn.innerHTML = `<span>Verificar y Desbloquear</span><i class="fa-solid fa-arrow-right"></i>`;
+        }
+    }
+
+    // ----------------- Gestión de 2FA en el Dashboard -----------------
+    async function check2FaStatus() {
+        if (!state.isAuthenticated) return;
+        try {
+            const data = await apiFetch("/api/auth/2fa/status");
+            state.twoFactorActive = !!data.enabled;
+            if (dom.setup2FaBanner) {
+                const dismissed = sessionStorage.getItem("camila_2fa_banner_dismissed");
+                if (!state.twoFactorActive && dismissed !== "true") {
+                    dom.setup2FaBanner.classList.remove("hidden");
+                } else {
+                    dom.setup2FaBanner.classList.add("hidden");
+                }
+            }
+        } catch (e) {
+            console.warn("No se pudo verificar el estado de 2FA:", e);
+        }
+    }
+
+    async function open2FaModal() {
+        if (!state.isAuthenticated) return;
+        dom.twoFactorModal.classList.remove("hidden");
+        dom.confirm2FaError.classList.add("hidden");
+        dom.confirm2FaInput.value = "";
+
+        try {
+            const statusData = await apiFetch("/api/auth/2fa/status");
+            state.twoFactorActive = !!statusData.enabled;
+
+            if (state.twoFactorActive) {
+                dom.twoFactorSetupView.classList.add("hidden");
+                dom.twoFactorActiveView.classList.remove("hidden");
+            } else {
+                dom.twoFactorActiveView.classList.add("hidden");
+                dom.twoFactorSetupView.classList.remove("hidden");
+                dom.twoFactorSecretText.textContent = "Generando clave segura...";
+                dom.twoFactorQrImg.src = "";
+
+                const setupData = await apiFetch("/api/auth/2fa/setup", { method: "POST" });
+                state.pending2FaSecret = setupData.secret;
+                dom.twoFactorSecretText.textContent = setupData.secret;
+                dom.twoFactorQrImg.src = setupData.qr_code_svg;
+            }
+        } catch (err) {
+            showToast(`Error al cargar 2FA: ${err.message}`, "error");
+            dom.twoFactorModal.classList.add("hidden");
+        }
+    }
+
+    function close2FaModal() {
+        dom.twoFactorModal.classList.add("hidden");
+        dom.confirm2FaError.classList.add("hidden");
+        dom.confirm2FaInput.value = "";
+    }
+
+    async function handleConfirm2Fa(e) {
+        e.preventDefault();
+        const code = (dom.confirm2FaInput.value || "").trim();
+        if (!code || !state.pending2FaSecret) return;
+
+        dom.save2FaBtn.disabled = true;
+        dom.save2FaBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Activando...`;
+        dom.confirm2FaError.classList.add("hidden");
+
+        try {
+            const res = await apiFetch("/api/auth/2fa/confirm", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ secret: state.pending2FaSecret, code })
+            });
+
+            state.twoFactorActive = true;
+            if (dom.setup2FaBanner) dom.setup2FaBanner.classList.add("hidden");
+            showToast(res.message || "¡2FA activado con éxito! ✨", "success");
+            dom.twoFactorSetupView.classList.add("hidden");
+            dom.twoFactorActiveView.classList.remove("hidden");
+        } catch (err) {
+            dom.confirm2FaErrorText.textContent = err.message || "Código incorrecto o expirado";
+            dom.confirm2FaError.classList.remove("hidden");
+            dom.confirm2FaInput.focus();
+        } finally {
+            dom.save2FaBtn.disabled = false;
+            dom.save2FaBtn.innerHTML = `<i class="fa-solid fa-check"></i> Confirmar y Activar 2FA`;
+        }
+    }
+
+    async function handleDisable2Fa() {
+        const pwd = prompt("Por seguridad, ingresa tu contraseña maestra para desactivar el 2FA:");
+        if (!pwd) return;
+
+        try {
+            await apiFetch("/api/auth/2fa/disable", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ password: pwd })
+            });
+            state.twoFactorActive = false;
+            showToast("Segundo factor de autenticación desactivado", "info");
+            open2FaModal(); // Recargar a vista de configuración
+            if (dom.setup2FaBanner) dom.setup2FaBanner.classList.remove("hidden");
+        } catch (err) {
+            showToast(err.message || "Contraseña incorrecta", "error");
         }
     }
 
@@ -1122,6 +1299,71 @@
         dom.serverConfigForm.addEventListener("submit", handleSaveServerUrl);
         dom.resetServerUrlBtn.addEventListener("click", handleResetServerUrl);
 
+        // Eventos de 2FA y Acceso de Rescate
+        if (dom.show2FaRescueBtn) {
+            dom.show2FaRescueBtn.addEventListener("click", () => {
+                dom.loginForm.classList.add("hidden");
+                dom.login2FaForm.classList.remove("hidden");
+                dom.login2FaError.classList.add("hidden");
+                dom.totpRescueInput.focus();
+            });
+        }
+
+        if (dom.backToPasswordBtn) {
+            dom.backToPasswordBtn.addEventListener("click", () => {
+                dom.login2FaForm.classList.add("hidden");
+                dom.loginForm.classList.remove("hidden");
+                dom.loginError.classList.add("hidden");
+                dom.passwordInput.focus();
+            });
+        }
+
+        if (dom.login2FaForm) {
+            dom.login2FaForm.addEventListener("submit", handle2FaLogin);
+        }
+
+        if (dom.open2FaSetupBtn) {
+            dom.open2FaSetupBtn.addEventListener("click", open2FaModal);
+        }
+
+        if (dom.dismiss2FaBannerBtn) {
+            dom.dismiss2FaBannerBtn.addEventListener("click", () => {
+                dom.setup2FaBanner.classList.add("hidden");
+                sessionStorage.setItem("camila_2fa_banner_dismissed", "true");
+            });
+        }
+
+        if (dom.security2FaBtn) {
+            dom.security2FaBtn.addEventListener("click", open2FaModal);
+        }
+
+        if (dom.close2FaModalBtn) {
+            dom.close2FaModalBtn.addEventListener("click", close2FaModal);
+        }
+
+        if (dom.confirm2FaForm) {
+            dom.confirm2FaForm.addEventListener("submit", handleConfirm2Fa);
+        }
+
+        if (dom.disable2FaBtn) {
+            dom.disable2FaBtn.addEventListener("click", handleDisable2Fa);
+        }
+
+        if (dom.copySecretBtn) {
+            dom.copySecretBtn.addEventListener("click", () => {
+                if (state.pending2FaSecret) {
+                    navigator.clipboard.writeText(state.pending2FaSecret).then(() => {
+                        dom.copySecretBtn.innerHTML = `<i class="fa-solid fa-check"></i> ¡Copiado!`;
+                        setTimeout(() => {
+                            dom.copySecretBtn.innerHTML = `<i class="fa-solid fa-copy"></i> Copiar`;
+                        }, 2000);
+                    }).catch(() => {
+                        showToast("No se pudo copiar automáticamente al portapapeles", "info");
+                    });
+                }
+            });
+        }
+
         // Cerrar modales con tecla ESC
         window.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
@@ -1130,16 +1372,19 @@
                 closeDeleteModal();
                 closeStatsModal();
                 closeServerModal();
+                close2FaModal();
             }
         });
 
         // Cerrar modales al hacer clic en el fondo
-        [dom.previewModal, dom.renameModal, dom.deleteModal, dom.statsModal, dom.serverModal].forEach(modal => {
-            modal.addEventListener("click", (e) => {
-                if (e.target === modal) {
-                    modal.classList.add("hidden");
-                }
-            });
+        [dom.previewModal, dom.renameModal, dom.deleteModal, dom.statsModal, dom.serverModal, dom.twoFactorModal].forEach(modal => {
+            if (modal) {
+                modal.addEventListener("click", (e) => {
+                    if (e.target === modal) {
+                        modal.classList.add("hidden");
+                    }
+                });
+            }
         });
     }
 

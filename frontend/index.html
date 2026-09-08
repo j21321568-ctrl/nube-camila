@@ -69,6 +69,49 @@
                     <span>Desbloquear Mi Nube</span>
                     <i class="fa-solid fa-arrow-right"></i>
                 </button>
+
+                <div class="switch-auth-wrap">
+                    <button type="button" id="show2FaRescueBtn" class="link-btn switch-auth-btn">
+                        <i class="fa-solid fa-shield-halved"></i> ¿Olvidaste tu contraseña? Entrar con código 2FA
+                    </button>
+                </div>
+            </form>
+
+            <!-- Formulario alternativo de Rescate con Código 2FA -->
+            <form id="login2FaForm" class="vault-form hidden">
+                <div class="rescue-2fa-info">
+                    <span class="rescue-tag"><i class="fa-solid fa-shield-halved"></i> Acceso de Respaldo 2FA</span>
+                    <p class="rescue-desc">Ingresa el código de 6 dígitos de tu app de autenticación (Google Authenticator, Microsoft o Apple):</p>
+                </div>
+
+                <div class="input-group">
+                    <i class="fa-solid fa-mobile-screen-button input-icon"></i>
+                    <input 
+                        type="text" 
+                        id="totpRescueInput" 
+                        placeholder="Código 2FA (ej. 123456)..." 
+                        autocomplete="one-time-code"
+                        inputmode="numeric"
+                        pattern="[0-9]{6}"
+                        maxlength="6"
+                    >
+                </div>
+
+                <div id="login2FaError" class="login-error hidden">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                    <span id="login2FaErrorText">Código 2FA incorrecto</span>
+                </div>
+
+                <button type="submit" id="unlock2FaBtn" class="btn btn-primary btn-block">
+                    <span>Verificar y Desbloquear</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+
+                <div class="switch-auth-wrap">
+                    <button type="button" id="backToPasswordBtn" class="link-btn switch-auth-btn">
+                        <i class="fa-solid fa-arrow-left"></i> Volver a ingresar contraseña
+                    </button>
+                </div>
             </form>
 
             <div class="vault-footer">
@@ -117,6 +160,9 @@
                 <button id="storageStatsBtn" class="icon-btn" title="Estadísticas de Almacenamiento">
                     <i class="fa-solid fa-chart-pie"></i>
                 </button>
+                <button id="security2FaBtn" class="icon-btn" title="Seguridad y Segundo Factor (2FA)">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </button>
                 <button id="serverConfigBtn" class="icon-btn" title="Ajustes de Servidor">
                     <i class="fa-solid fa-gear"></i>
                 </button>
@@ -125,6 +171,27 @@
                 </button>
             </div>
         </header>
+
+        <!-- Banner Dinámico de Sugerencia 2FA -->
+        <div id="setup2FaBanner" class="twofa-banner hidden">
+            <div class="twofa-banner-content">
+                <div class="twofa-banner-icon">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <div class="twofa-banner-text">
+                    <strong>¿Deseas activar la protección 2FA en tu nube? ✨</strong>
+                    <span>Protege tus fotos y archivos con Google Authenticator o Apple Passwords, y úsalo para entrar si olvidas tu contraseña.</span>
+                </div>
+                <div class="twofa-banner-actions">
+                    <button id="open2FaSetupBtn" class="btn btn-sm btn-primary">
+                        <i class="fa-solid fa-qrcode"></i> Activar 2FA
+                    </button>
+                    <button id="dismiss2FaBannerBtn" class="btn btn-sm btn-secondary" title="Recordar más tarde">
+                        <i class="fa-solid fa-xmark"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
 
         <!-- Barra de Herramientas y Filtros -->
         <div class="toolbar-section">
@@ -403,6 +470,82 @@
                     <button type="submit" class="btn btn-primary">Guardar Dirección</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Modal de Configuración y Gestión 2FA -->
+    <div id="twoFactorModal" class="modal-backdrop hidden">
+        <div class="modal-card glass-panel twofa-modal-card">
+            <div class="modal-header">
+                <div class="modal-title-wrap">
+                    <div class="modal-icon-badge">
+                        <i class="fa-solid fa-shield-halved"></i>
+                    </div>
+                    <div>
+                        <h3 class="modal-title">Segundo Factor de Autenticación (2FA)</h3>
+                        <p class="modal-subtitle">Protección con Google Authenticator, Microsoft o Apple</p>
+                    </div>
+                </div>
+                <button id="close2FaModalBtn" class="icon-btn" title="Cerrar"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body twofa-modal-body">
+                <!-- Vista 1: Configurar / Activar 2FA -->
+                <div id="twoFactorSetupView">
+                    <div class="twofa-step">
+                        <span class="step-num">1</span>
+                        <span class="step-text">Escanea este código QR con tu app de autenticación móvil:</span>
+                    </div>
+                    <div class="qr-wrapper">
+                        <img id="twoFactorQrImg" class="twofa-qr-img" alt="Código QR 2FA" src="">
+                    </div>
+                    <div class="twofa-step">
+                        <span class="step-num">2</span>
+                        <span class="step-text">O agrega esta clave secreta manualmente en tu app:</span>
+                    </div>
+                    <div class="key-copy-box">
+                        <code id="twoFactorSecretText" class="secret-code">Cargando clave...</code>
+                        <button type="button" id="copySecretBtn" class="btn btn-sm btn-secondary" title="Copiar al portapapeles">
+                            <i class="fa-solid fa-copy"></i> Copiar
+                        </button>
+                    </div>
+                    <div class="twofa-step">
+                        <span class="step-num">3</span>
+                        <span class="step-text">Ingresa el código de 6 dígitos que muestra tu teléfono para confirmar:</span>
+                    </div>
+                    <form id="confirm2FaForm" class="confirm-2fa-form">
+                        <div class="input-group">
+                            <i class="fa-solid fa-mobile-screen-button input-icon"></i>
+                            <input 
+                                type="text" 
+                                id="confirm2FaInput" 
+                                placeholder="000000" 
+                                maxlength="6"
+                                inputmode="numeric" 
+                                required
+                            >
+                        </div>
+                        <div id="confirm2FaError" class="login-error hidden">
+                            <i class="fa-solid fa-circle-exclamation"></i>
+                            <span id="confirm2FaErrorText">Código incorrecto</span>
+                        </div>
+                        <button type="submit" id="save2FaBtn" class="btn btn-primary btn-block">
+                            <i class="fa-solid fa-check"></i> Confirmar y Activar 2FA
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Vista 2: Estado Activo / Desactivar 2FA -->
+                <div id="twoFactorActiveView" class="twofa-active-view hidden">
+                    <div class="twofa-active-badge">
+                        <i class="fa-solid fa-circle-check"></i>
+                        <h4>2FA Está Activado y Protegiendo tu Nube ✨</h4>
+                        <p>Si alguna vez olvidas tu contraseña maestra, puedes desbloquear tu nube usando el código de 6 dígitos de tu app de autenticación.</p>
+                    </div>
+                    <button type="button" id="disable2FaBtn" class="btn btn-danger btn-block">
+                        <i class="fa-solid fa-trash-can"></i> Desactivar Segundo Factor (2FA)
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 

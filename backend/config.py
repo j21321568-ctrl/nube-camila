@@ -6,6 +6,8 @@ cloud (Render, Railway, Heroku, VPS) mediante Variables de Entorno.
 import os
 import json
 import base64
+import time
+from typing import Optional
 from pathlib import Path
 
 # Intentar cargar python-dotenv si está disponible
@@ -176,3 +178,62 @@ def get_service_account_info() -> dict:
     raise RuntimeError(
         "No se encontraron credenciales de Google Drive. Configura GOOGLE_CREDENTIALS_JSON en producción o coloca credentials.json en la raíz del proyecto."
     )
+
+# 10. Configuración de Segundo Factor de Autenticación (2FA / TOTP - M3)
+TWO_FACTOR_CONFIG_FILE = ROOT_DIR / ".shiori_2fa.json"
+
+def get_2fa_config() -> dict:
+    """
+    Obtiene la configuración activa de 2FA.
+    Prioridad:
+    1. Archivo persistente .shiori_2fa.json
+    2. Variable de entorno TOTP_SECRET
+    """
+    if TWO_FACTOR_CONFIG_FILE.exists():
+        try:
+            data = json.loads(TWO_FACTOR_CONFIG_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("enabled") and data.get("secret"):
+                return {"enabled": True, "secret": str(data["secret"]).strip(), "source": "file"}
+            elif isinstance(data, dict) and data.get("enabled") is False:
+                return {"enabled": False, "secret": None, "source": "file"}
+        except Exception:
+            pass
+
+    env_secret = os.getenv("TOTP_SECRET")
+    if env_secret and env_secret.strip():
+        return {"enabled": True, "secret": env_secret.strip(), "source": "env"}
+
+    return {"enabled": False, "secret": None, "source": "none"}
+
+def save_2fa_config(secret: str) -> None:
+    """Guarda y activa la configuración 2FA de forma persistente."""
+    if not secret or len(secret.strip()) < 16:
+        raise ValueError("El secreto TOTP debe tener al menos 16 caracteres Base32.")
+    payload = {
+        "enabled": True,
+        "secret": secret.strip(),
+        "updated_at": int(time.time())
+    }
+    temp_file = ROOT_DIR / ".shiori_2fa.json.tmp"
+    temp_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temp_file.replace(TWO_FACTOR_CONFIG_FILE)
+
+def disable_2fa_config() -> None:
+    """Desactiva 2FA eliminando o sobreescribiendo el archivo de configuración."""
+    if TWO_FACTOR_CONFIG_FILE.exists():
+        try:
+            TWO_FACTOR_CONFIG_FILE.unlink()
+        except Exception:
+            TWO_FACTOR_CONFIG_FILE.write_text(json.dumps({"enabled": False, "secret": None}), encoding="utf-8")
+
+def is_2fa_enabled() -> bool:
+    """Retorna True si 2FA está configurado y habilitado en el sistema."""
+    cfg = get_2fa_config()
+    return bool(cfg.get("enabled") and cfg.get("secret"))
+
+def get_totp_secret() -> Optional[str]:
+    """Retorna el secreto Base32 activo si 2FA está habilitado, o None."""
+    cfg = get_2fa_config()
+    if cfg.get("enabled"):
+        return cfg.get("secret")
+    return None

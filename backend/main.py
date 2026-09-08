@@ -15,7 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import PORT, HOST, CORS_ORIGINS, COOKIE_SAMESITE, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES
+from .config import (
+    PORT, HOST, CORS_ORIGINS, COOKIE_SAMESITE, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES,
+    is_2fa_enabled, save_2fa_config, disable_2fa_config, get_2fa_config
+)
 from .auth import (
     verify_password,
     create_access_token,
@@ -23,7 +26,11 @@ from .auth import (
     require_auth,
     require_file_access,
     revoke_all_sessions,
-    TOKEN_EXPIRATION_SECONDS
+    TOKEN_EXPIRATION_SECONDS,
+    generate_new_totp_secret,
+    get_totp_uri,
+    generate_qr_svg_data_uri,
+    verify_totp_code
 )
 from .logging_filter import setup_secure_logging
 from .drive_manager import drive_manager
@@ -83,6 +90,16 @@ async def limit_upload_payload_size(request: Request, call_next):
 
 # ----------------- Modelos de Datos -----------------
 class LoginRequest(BaseModel):
+    password: str
+
+class Login2FaRequest(BaseModel):
+    totp_code: str
+
+class Setup2FaConfirmRequest(BaseModel):
+    secret: str
+    code: str
+
+class Disable2FaRequest(BaseModel):
     password: str
 
 class RenameRequest(BaseModel):
@@ -212,7 +229,130 @@ def verify_session(user=Depends(require_auth)):
     """Comprueba si la sesión activa en el navegador sigue siendo válida."""
     return {
         "valid": True,
-        "user": user.get("sub", "camila")
+        "user": user.get("sub", "camila"),
+        "twoFactorEnabled": is_2fa_enabled()
+    }
+
+# ----------------- Rutas de Segundo Factor (2FA / TOTP - M3) -----------------
+@app.get("/api/auth/2fa/status")
+def get_2fa_status():
+    """Retorna si el segundo factor de autenticación (2FA) está configurado y activo."""
+    return {
+        "enabled": is_2fa_enabled()
+    }
+
+@app.post("/api/auth/2fa/setup")
+def setup_2fa(user=Depends(require_auth)):
+    """
+    Inicia la configuración de 2FA:
+    Genera un secreto provisional Base32, URL otpauth:// y código QR SVG sin llamadas externas.
+    """
+    secret = generate_new_totp_secret()
+    account_name = user.get("sub", "Camila")
+    otp_uri = get_totp_uri(secret, account_name=account_name)
+    qr_data_uri = generate_qr_svg_data_uri(otp_uri)
+    return {
+        "secret": secret,
+        "otpauth_url": otp_uri,
+        "qr_code_svg": qr_data_uri,
+        "account_name": account_name
+    }
+
+@app.post("/api/auth/2fa/confirm")
+def confirm_2fa(req: Setup2FaConfirmRequest, user=Depends(require_auth)):
+    """
+    Valida el código de prueba de 6 dígitos introducido por Camila y activa permanentemente el 2FA.
+    """
+    if not req.secret or not req.code:
+        raise HTTPException(status_code=400, detail="Faltan datos requeridos (secreto o código)")
+
+    if not verify_totp_code(req.code, secret=req.secret):
+        raise HTTPException(
+            status_code=400,
+            detail="El código de 6 dígitos ingresado es incorrecto o ha expirado. Verifica la hora de tu dispositivo e inténtalo nuevamente."
+        )
+
+    save_2fa_config(req.secret)
+    return {
+        "success": True,
+        "enabled": True,
+        "message": "¡Segundo factor de autenticación (2FA) activado exitosamente! ✨"
+    }
+
+@app.post("/api/auth/2fa/disable")
+def disable_2fa_route(req: Disable2FaRequest, user=Depends(require_auth)):
+    """Desactiva 2FA previa confirmación obligatoria de la contraseña maestra."""
+    if not verify_password(req.password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Contraseña incorrecta. No se puede desactivar el segundo factor."
+        )
+    disable_2fa_config()
+    return {
+        "success": True,
+        "enabled": False,
+        "message": "Segundo factor de autenticación desactivado."
+    }
+
+@app.post("/api/auth/login-2fa")
+def login_2fa(req: Login2FaRequest, request: Request, response: Response):
+    """
+    Acceso de rescate mediante código 2FA (TOTP de 6 dígitos).
+    Permite acceder si Camila olvidó su contraseña, o como vía de autenticación alternativa.
+    Protegido contra ataques de fuerza bruta mediante Shiori Persistent Rate Limiter.
+    """
+    if not is_2fa_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La autenticación en dos pasos (2FA) no está activada en esta cuenta. Ingresa con tu contraseña habitual."
+        )
+
+    client_ip = get_client_ip(request)
+
+    # 1. Verificar bloqueo por fuerza bruta de IP
+    is_allowed, wait_seconds = shiori_limiter.check_login_allowed(client_ip)
+    if not is_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Protección Shiori Sentinel: IP bloqueada temporalmente por reiterados intentos fallidos. Espera {wait_seconds} segundos.",
+            headers={"Retry-After": str(wait_seconds)}
+        )
+
+    # 2. Verificar código TOTP
+    if not verify_totp_code(req.totp_code):
+        failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
+        if lockout_sec > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"Protección Shiori Sentinel: Límite de 5 intentos superado. IP bloqueada por {lockout_sec // 60} minutos.",
+                headers={"Retry-After": str(lockout_sec)}
+            )
+        attempts_left = max(0, 5 - failed_count)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Código 2FA incorrecto o expirado. Te quedan {attempts_left} intento(s) antes del bloqueo temporal."
+        )
+
+    # 3. Código 2FA válido: limpiar contador de fallos de la IP y emitir sesión
+    shiori_limiter.record_login_success(client_ip)
+    token = create_access_token(subject="camila")
+
+    response.set_cookie(
+        key="camila_session",
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite=COOKIE_SAMESITE,
+        max_age=TOKEN_EXPIRATION_SECONDS,
+        path="/"
+    )
+
+    return {
+        "success": True,
+        "token": token,
+        "expiresIn": TOKEN_EXPIRATION_SECONDS,
+        "userName": "Camila",
+        "message": "¡Acceso de respaldo con 2FA concedido exitosamente! ✨"
     }
 
 # ----------------- Rutas de Archivos en Google Drive -----------------
