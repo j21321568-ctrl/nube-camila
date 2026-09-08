@@ -446,6 +446,7 @@ RUTAS DE LA API REST (v2.0.0)
 ├── [PÚBLICO]  GET    /health
 ├── [PÚBLICO]  GET    /api/health
 ├── [AUTH]     GET    /api/health/detail
+├── [PÚBLICO]  GET    /api/auth/challenge
 ├── [LIMITADO] POST   /api/auth/login
 ├── [AUTH]     GET    /api/auth/verify
 ├── [AUTH]     GET    /api/files
@@ -485,12 +486,29 @@ RUTAS DE LA API REST (v2.0.0)
   }
   ```
 
+#### 1.2 Estado de Desafío Anti-Bot: `GET /api/auth/challenge`
+- **Autenticación**: Pública.
+- **Propósito**: Notifica al frontend si la IP actual requiere resolver un desafío (Cloudflare Turnstile o Proof-of-Work criptográfico) antes de procesar el inicio de sesión (M9).
+- **Respuesta Exitosa (200 OK)**:
+  ```json
+  {
+    "challenge_required": true,
+    "turnstile_enabled": false,
+    "turnstile_site_key": null,
+    "pow_difficulty": 4,
+    "pow_challenge": "1725753600:a1b2c3d4...:signature"
+  }
+  ```
+
 #### 2. Inicio de Sesión: `POST /api/auth/login`
-- **Autenticación**: Pública (Protegida por `ShioriRateLimiter` en IP: máx 5 intentos).
+- **Autenticación**: Pública (Protegida por `ShioriRateLimiter` en IP: máx 5 intentos + Anti-Bot M9).
 - **Cuerpo de Petición (JSON)**:
   ```json
   {
-    "password": "camila2026"
+    "password": "contraseña_maestra",
+    "turnstile_token": "0.abcdef... (opcional, si Turnstile está activo)",
+    "pow_challenge": "1725753600:... (opcional, si PoW está activo)",
+    "pow_nonce": "12345 (opcional, si PoW está activo)"
   }
   ```
 - **Respuesta Exitosa (200 OK)**:
@@ -503,8 +521,9 @@ RUTAS DE LA API REST (v2.0.0)
   }
   ```
 - **Errores Posibles**:
-  - `401 Unauthorized`: Contraseña errónea.
-  - `429 Too Many Requests`: Activación del escudo anti-fuerza bruta de Shiori.
+  - `401 Unauthorized`: Contraseña incorrecta.
+  - `403 Forbidden`: Desafío anti-bot requerido tras fallos previos o token/PoW inválido (M9).
+  - `429 Too Many Requests`: Activación del escudo anti-fuerza bruta de Shiori (bloqueo por 15 minutos tras 5 fallos).
 
 #### 3. Verificación de Sesión: `GET /api/auth/verify`
 - **Autenticación**: Requiere token válido.

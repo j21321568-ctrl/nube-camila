@@ -37,6 +37,11 @@
         loginError: document.getElementById("loginError"),
         loginErrorText: document.getElementById("loginErrorText"),
         unlockBtn: document.getElementById("unlockBtn"),
+        loginChallengeContainer: document.getElementById("loginChallengeContainer"),
+        turnstileWidgetWrap: document.getElementById("turnstileWidgetWrap"),
+        turnstileWidget: document.getElementById("turnstileWidget"),
+        powStatusWrap: document.getElementById("powStatusWrap"),
+        powStatusText: document.getElementById("powStatusText"),
 
         // Rescate 2FA
         show2FaRescueBtn: document.getElementById("show2FaRescueBtn"),
@@ -271,6 +276,38 @@
         showLockScreen();
     }
 
+    // ----------------- Motor de Desafío Anti-Bot y PoW (M9) -----------------
+    let turnstileToken = null;
+
+    async function solveProofOfWork(challenge, difficulty = 4) {
+        const enc = new TextEncoder();
+        let nonce = 0;
+        const fullZeroBytes = Math.floor(difficulty / 2);
+        const needNibble = (difficulty % 2 !== 0);
+
+        while (true) {
+            for (let i = 0; i < 400; i++) {
+                const msg = enc.encode(`${challenge}:${nonce}`);
+                const hashBuf = await crypto.subtle.digest("SHA-256", msg);
+                const hashArr = new Uint8Array(hashBuf);
+
+                let match = true;
+                for (let b = 0; b < fullZeroBytes; b++) {
+                    if (hashArr[b] !== 0) { match = false; break; }
+                }
+                if (match && needNibble) {
+                    if ((hashArr[fullZeroBytes] >> 4) !== 0) match = false;
+                }
+                if (match) {
+                    return String(nonce);
+                }
+                nonce++;
+            }
+            // Ceder microtarea para mantener fluidez en el navegador
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+
     async function handleLogin(e) {
         e.preventDefault();
         const password = dom.passwordInput.value;
@@ -280,17 +317,53 @@
         dom.unlockBtn.innerHTML = `<span>Verificando...</span><div class="spinner-small"></div>`;
         dom.loginError.classList.add("hidden");
 
+        const payload = { password };
+
         try {
+            // 1. Comprobar si el backend exige resolver un desafío de seguridad (M9)
+            let challengeInfo = null;
+            try {
+                const chRes = await fetch(CONFIG.apiUrl("/api/auth/challenge"), { credentials: "include" });
+                if (chRes.ok) challengeInfo = await chRes.json();
+            } catch (_) {}
+
+            if (challengeInfo && challengeInfo.challenge_required) {
+                dom.loginChallengeContainer.classList.remove("hidden");
+
+                if (challengeInfo.turnstile_enabled && challengeInfo.turnstile_site_key) {
+                    // Modo Cloudflare Turnstile
+                    dom.turnstileWidgetWrap.classList.remove("hidden");
+                    dom.powStatusWrap.classList.add("hidden");
+                    if (!turnstileToken) {
+                        throw new Error("Por favor completa la verificación de seguridad de Cloudflare.");
+                    }
+                    payload.turnstile_token = turnstileToken;
+                } else if (challengeInfo.pow_challenge) {
+                    // Modo Proof-of-Work criptográfico autónomo
+                    dom.powStatusWrap.classList.remove("hidden");
+                    dom.powStatusText.textContent = "Verificando entorno criptográfico seguro...";
+                    const solvedNonce = await solveProofOfWork(
+                        challengeInfo.pow_challenge,
+                        challengeInfo.pow_difficulty || 4
+                    );
+                    payload.pow_challenge = challengeInfo.pow_challenge;
+                    payload.pow_nonce = solvedNonce;
+                }
+            }
+
             const data = await apiFetch("/api/auth/login", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ password })
+                body: JSON.stringify(payload)
             });
 
             // H4: El backend inyecta la cookie HttpOnly. El token se conserva solo en memoria durante la sesión activa.
             state.token = data.token || null;
             state.isAuthenticated = true;
             try { localStorage.removeItem("camila_cloud_token"); } catch (_) {}
+
+            dom.loginChallengeContainer.classList.add("hidden");
+            turnstileToken = null;
 
             showToast(`¡Bienvenida a tu nube, ${data.userName || "Camila"}! ✨`, "success");
             dom.passwordInput.value = "";

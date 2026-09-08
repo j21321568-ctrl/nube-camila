@@ -65,6 +65,17 @@
                     <span id="loginErrorText">Contraseña incorrecta</span>
                 </div>
 
+                <!-- Contenedor dinámico de Desafío Anti-Bot (Turnstile / PoW - M9) -->
+                <div id="loginChallengeContainer" class="login-challenge-container hidden">
+                    <div id="turnstileWidgetWrap" class="turnstile-wrap hidden">
+                        <div id="turnstileWidget"></div>
+                    </div>
+                    <div id="powStatusWrap" class="pow-status-wrap hidden">
+                        <i class="fa-solid fa-shield-halved fa-spin-pulse" style="color: var(--primary);"></i>
+                        <span id="powStatusText">Comprobando entorno de seguridad...</span>
+                    </div>
+                </div>
+
                 <button type="submit" id="unlockBtn" class="btn btn-primary btn-block">
                     <span>Desbloquear Mi Nube</span>
                     <i class="fa-solid fa-arrow-right"></i>

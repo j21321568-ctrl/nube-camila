@@ -144,7 +144,14 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 IS_RENDER = os.getenv("RENDER", "").lower() in ("true", "1", "yes")
 TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "").lower() in ("true", "1", "yes") or IS_RENDER
 
-# 10. Obtener Credenciales de Cuenta de Servicio
+# 10. Configuración de CAPTCHA Turnstile / Prueba de Trabajo Anti-Bot (M9)
+# Mitigación de ataques de fuerza bruta distribuidos de baja velocidad.
+TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "").strip()
+TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
+POW_DIFFICULTY = int(os.getenv("POW_DIFFICULTY", "4"))       # Ceros hexadecimales requeridos (default 4 = 16 bits)
+POW_TTL_SECONDS = int(os.getenv("POW_TTL_SECONDS", "300"))   # Validez del desafío (5 minutos)
+
+# 11. Obtener Credenciales de Cuenta de Servicio
 def get_service_account_info() -> dict:
     """
     Carga las credenciales de Google Service Account en orden de prioridad:

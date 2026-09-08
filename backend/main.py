@@ -17,7 +17,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import (
     PORT, HOST, CORS_ORIGINS, COOKIE_SAMESITE, MAX_UPLOAD_MB, MAX_UPLOAD_BYTES,
-    is_2fa_enabled, save_2fa_config, disable_2fa_config, get_2fa_config
+    is_2fa_enabled, save_2fa_config, disable_2fa_config, get_2fa_config,
+    TURNSTILE_SITE_KEY, TURNSTILE_SECRET_KEY, POW_DIFFICULTY, POW_TTL_SECONDS
 )
 from .auth import (
     verify_password,
@@ -40,7 +41,9 @@ from .shiori_guard import (
     shiori_entropy,
     shiori_guard,
     get_client_ip,
-    resolve_disposition
+    resolve_disposition,
+    ShioriProofOfWork,
+    verify_turnstile_token
 )
 
 # Inicializar filtro de censura de tokens en logs (previene fuga en Uvicorn/Render)
@@ -64,11 +67,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Length", "X-Shiori-Protection"]
 )
 
-# Middleware de protección contra DoS / OOM por tamaño de carga (M2)
+# Middleware de límite de tamaño de petición en streaming (M2: Mitigación DoS / OOM)
 @app.middleware("http")
 async def limit_upload_payload_size(request: Request, call_next):
     """Rechazo temprano por Content-Length antes de parsear multipart o consumir memoria."""
@@ -91,6 +95,9 @@ async def limit_upload_payload_size(request: Request, call_next):
 # ----------------- Modelos de Datos -----------------
 class LoginRequest(BaseModel):
     password: str
+    turnstile_token: Optional[str] = None
+    pow_challenge: Optional[str] = None
+    pow_nonce: Optional[str] = None
 
 class Login2FaRequest(BaseModel):
     totp_code: str
@@ -140,9 +147,27 @@ def favicon():
     return Response(status_code=204)
 
 # ----------------- Rutas de Autenticación -----------------
+@app.get("/api/auth/challenge")
+def get_auth_challenge(request: Request):
+    """
+    Verifica si la IP actual o el estado global del sistema requieren resolver un desafío
+    de seguridad (Cloudflare Turnstile o Proof-of-Work) antes de intentar login (M9).
+    """
+    client_ip = get_client_ip(request)
+    req_challenge = shiori_limiter.is_challenge_required(client_ip)
+    data = {
+        "challenge_required": req_challenge,
+        "turnstile_enabled": bool(TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY),
+        "turnstile_site_key": TURNSTILE_SITE_KEY if TURNSTILE_SITE_KEY else None,
+        "pow_difficulty": POW_DIFFICULTY
+    }
+    if req_challenge:
+        data["pow_challenge"] = ShioriProofOfWork.generate_challenge()
+    return data
+
 @app.post("/api/auth/login")
 def login(req: LoginRequest, request: Request, response: Response):
-    """Verifica la contraseña maestra con protección contra fuerza bruta de Shiori v14."""
+    """Verifica la contraseña maestra con protección contra fuerza bruta de Shiori v14 y CAPTCHA/PoW (M9)."""
     client_ip = get_client_ip(request)
     
     # 1. Comprobar si la IP está bloqueada por exceso de intentos fallidos
@@ -154,7 +179,46 @@ def login(req: LoginRequest, request: Request, response: Response):
             headers={"Retry-After": str(wait_seconds)}
         )
 
-    # 2. Verificar contraseña maestra en tiempo constante
+    # 2. Comprobar desafío de seguridad (Turnstile o PoW) si está requerido (M9)
+    if shiori_limiter.is_challenge_required(client_ip):
+        challenge_passed = False
+        challenge_error = ""
+
+        if req.turnstile_token and TURNSTILE_SECRET_KEY:
+            ok, err = verify_turnstile_token(req.turnstile_token, client_ip)
+            if ok:
+                challenge_passed = True
+            else:
+                challenge_error = err or "Token de Turnstile inválido"
+        elif req.pow_challenge and req.pow_nonce:
+            ok, err = ShioriProofOfWork.verify_solution(
+                req.pow_challenge,
+                req.pow_nonce,
+                difficulty=POW_DIFFICULTY,
+                ttl_seconds=POW_TTL_SECONDS
+            )
+            if ok:
+                challenge_passed = True
+            else:
+                challenge_error = err or "Prueba de trabajo (PoW) incorrecta o insuficiente"
+        else:
+            challenge_error = "Se requiere resolver un desafío de seguridad (Turnstile o PoW) tras intentos fallidos previos"
+
+        if not challenge_passed:
+            failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
+            if lockout_sec > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Protección Shiori Sentinel: Límite de 5 intentos superado. IP bloqueada por {lockout_sec // 60} minutos.",
+                    headers={"Retry-After": str(lockout_sec)}
+                )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Protección contra ataques distribuidos (M9): {challenge_error}",
+                headers={"X-Challenge-Required": "true"}
+            )
+
+    # 3. Verificar contraseña maestra en tiempo constante
     if not verify_password(req.password):
         failed_count, lockout_sec = shiori_limiter.record_login_failure(client_ip)
         if lockout_sec > 0:
@@ -167,9 +231,10 @@ def login(req: LoginRequest, request: Request, response: Response):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Contraseña incorrecta. Te quedan {attempts_left} intento(s) antes del bloqueo temporal.",
+            headers={"X-Challenge-Required": "true"}
         )
 
-    # 3. Login exitoso: limpiar contador de fallos de la IP
+    # 4. Login exitoso: limpiar contador de fallos de la IP
     shiori_limiter.record_login_success(client_ip)
     token = create_access_token(subject="camila")
     

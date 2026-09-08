@@ -151,6 +151,28 @@ class ShioriPersistentRateLimiter:
         except Exception:
             return True, 0
 
+    def is_challenge_required(self, ip: str) -> bool:
+        """
+        Determina si se requiere verificación de desafío anti-bot (Turnstile o PoW) (M9).
+        Se activa si la IP específica tiene 1 o más intentos fallidos acumulados en la ventana de observación.
+        """
+        now = time.time()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT failed_count, last_failed_at FROM login_rate_limits WHERE ip = ?",
+                    (ip,)
+                )
+                row = cursor.fetchone()
+                if row:
+                    failed_count, last_failed_at = row
+                    if (now - last_failed_at) <= self.OBSERVATION_WINDOW_SECONDS and failed_count >= 1:
+                        return True
+                return False
+        except Exception:
+            return False
+
     def record_login_failure(self, ip: str) -> Tuple[int, int]:
         """
         Registra un intento de login fallido.
@@ -311,6 +333,110 @@ def get_client_ip(request: Request) -> str:
     return "127.0.0.1"
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+#  [POW] SHIORI PROOF-OF-WORK & CAPTCHA ENGINE (M9)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class ShioriProofOfWork:
+    """
+    Motor autónomo de Proof-of-Work criptográfico (M9).
+    Mitiga ataques de fuerza bruta distribuidos de baja velocidad obligando
+    al cliente a resolver un desafío computacional en JavaScript antes de enviar
+    el intento de inicio de sesión tras cualquier fallo previo.
+    """
+
+    @staticmethod
+    def generate_challenge() -> str:
+        """
+        Genera un desafío firmado criptográficamente con HMAC-SHA3-256.
+        Formato: timestamp:random_salt:signature
+        """
+        from .config import SECRET_KEY
+        import os
+        now = int(time.time())
+        salt = os.urandom(16).hex()
+        raw = f"{now}:{salt}"
+        sig = hmac.new(SECRET_KEY.encode("utf-8"), raw.encode("utf-8"), hashlib.sha3_256).hexdigest()
+        return f"{raw}:{sig}"
+
+    @staticmethod
+    def verify_solution(challenge: str, nonce: str, difficulty: int = 4, ttl_seconds: int = 300) -> Tuple[bool, Optional[str]]:
+        """
+        Verifica autenticidad, frescura y prueba matemática del desafío.
+        Verifica que SHA-256(challenge:nonce) comience con 'difficulty' ceros hexadecimales.
+        """
+        from .config import SECRET_KEY
+        if not challenge or not nonce:
+            return False, "Faltan parámetros del desafío (challenge o nonce)"
+
+        parts = challenge.split(":")
+        if len(parts) != 3:
+            return False, "Estructura del desafío alterada o inválida"
+
+        ts_str, salt, sig = parts
+        try:
+            ts = int(ts_str)
+        except ValueError:
+            return False, "Timestamp del desafío corrupto"
+
+        now = int(time.time())
+        if (now - ts) > ttl_seconds:
+            return False, "El desafío ha expirado. Solicita uno nuevo"
+        if (ts - now) > 30:
+            return False, "Timestamp del desafío desfasado respecto al reloj del servidor"
+
+        raw = f"{ts_str}:{salt}"
+        expected_sig = hmac.new(SECRET_KEY.encode("utf-8"), raw.encode("utf-8"), hashlib.sha3_256).hexdigest()
+        if not hmac.compare_digest(sig, expected_sig):
+            return False, "Firma del desafío inválida o adulterada"
+
+        # Verificar prueba de trabajo (SHA-256)
+        check_input = f"{challenge}:{nonce}".encode("utf-8")
+        digest_hex = hashlib.sha256(check_input).hexdigest()
+        target_prefix = "0" * difficulty
+        if not digest_hex.startswith(target_prefix):
+            return False, f"Prueba matemática insuficiente (se requerían {difficulty} ceros iniciales en SHA-256)"
+
+        return True, None
+
+
+def verify_turnstile_token(token: str, remote_ip: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+    """Valida un token de Cloudflare Turnstile con el endpoint de verificación oficial."""
+    from .config import TURNSTILE_SECRET_KEY
+    import urllib.request
+    import urllib.parse
+    import json
+
+    if not TURNSTILE_SECRET_KEY:
+        return False, "Cloudflare Turnstile no está configurado en el servidor"
+
+    if not token or not token.strip():
+        return False, "Token de Turnstile no proporcionado"
+
+    post_data = {
+        "secret": TURNSTILE_SECRET_KEY,
+        "response": token.strip()
+    }
+    if remote_ip:
+        post_data["remoteip"] = remote_ip
+
+    data_bytes = urllib.parse.urlencode(post_data).encode("utf-8")
+    req = urllib.request.Request(
+        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        data=data_bytes,
+        headers={"Content-Type": "application/x-www-form-urlencoded"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            if result.get("success"):
+                return True, None
+            error_codes = result.get("error-codes", [])
+            return False, f"Verificación Turnstile rechazada: {', '.join(error_codes)}"
+    except Exception as e:
+        return False, f"Error al contactar con Cloudflare Turnstile: {str(e)}"
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 #  [ENT] ENTROPY SHIELD & MAGIC BYTES MALWARE INSPECTION
@@ -464,11 +590,11 @@ class ShioriSecurityHeadersMiddleware(BaseHTTPMiddleware):
             "default-src 'self'; "
             "img-src 'self' data: blob: https://*.googleusercontent.com https://drive.google.com; "
             "media-src 'self' blob: data:; "
-            "script-src 'self'; "
+            "script-src 'self' https://challenges.cloudflare.com; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
             "font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com data:; "
-            "connect-src 'self' https://*.onrender.com https://*.railway.app http://127.0.0.1:* http://localhost:*; "
-            "frame-src 'self' blob: data:; "
+            "connect-src 'self' https://*.onrender.com https://*.railway.app https://challenges.cloudflare.com http://127.0.0.1:* http://localhost:*; "
+            "frame-src 'self' blob: data: https://challenges.cloudflare.com; "
             "object-src 'none'; "
             "frame-ancestors 'self'; "
             "base-uri 'self'; "
