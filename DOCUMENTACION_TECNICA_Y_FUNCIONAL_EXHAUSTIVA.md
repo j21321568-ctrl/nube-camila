@@ -434,6 +434,7 @@ Total de líneas: 249 | Dependencias: `fastapi`, `pydantic`, `starlette.staticfi
 RUTAS DE LA API REST (v2.0.0)
 ├── [PÚBLICO]  GET    /health
 ├── [PÚBLICO]  GET    /api/health
+├── [AUTH]     GET    /api/health/detail
 ├── [LIMITADO] POST   /api/auth/login
 ├── [AUTH]     GET    /api/auth/verify
 ├── [AUTH]     GET    /api/files
@@ -451,7 +452,17 @@ RUTAS DE LA API REST (v2.0.0)
 
 #### 1. Diagnóstico de Salud: `GET /health` y `GET /api/health`
 - **Autenticación**: Pública.
-- **Propósito**: Comprobar disponibilidad inmediata y despertar servidores con reposo dinámico en Render.
+- **Propósito**: Comprobar disponibilidad inmediata y despertar servidores con reposo dinámico en Render sin fuga de metadatos o fingerprinting (M7).
+- **Respuesta Exitosa (200 OK)**:
+  ```json
+  {
+    "status": "online"
+  }
+  ```
+
+#### 1.1 Diagnóstico Detallado del Sistema: `GET /api/health/detail`
+- **Autenticación**: Requerida (`require_auth`).
+- **Propósito**: Consulta protegida de telemetría, versiones y módulos de ciberdefensa activos para diagnósticos internos autorizados.
 - **Respuesta Exitosa (200 OK)**:
   ```json
   {

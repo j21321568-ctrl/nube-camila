@@ -115,7 +115,13 @@ class DeleteConfirmRequest(BaseModel):
 @app.get("/health")
 @app.get("/api/health")
 def health_check():
-    """Endpoint ligero para verificar disponibilidad y despertar servidores (Render)."""
+    """Endpoint público ultraligero y mínimo para verificar disponibilidad y despertar servidores (Render).
+    Previene fingerprinting de versiones y stack de seguridad (M7)."""
+    return {"status": "online"}
+
+@app.get("/api/health/detail")
+def health_detail(_user: dict = Depends(require_auth)):
+    """Endpoint de diagnóstico interno y métricas completas, accesible solo con sesión autenticada (M7)."""
     return {
         "status": "online",
         "app": "Nube Privada de Camila",
@@ -123,6 +129,7 @@ def health_check():
         "protection": "Shiori Sentinel v14.0",
         "message": "Servidor activo y listo para procesar peticiones ✨"
     }
+
 
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
