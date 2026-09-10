@@ -6,6 +6,7 @@ para usar sus 15 GB gratuitos de almacenamiento sin restricciones de Cuentas de 
 import sys
 import json
 from pathlib import Path
+import os
 
 if sys.platform == "win32":
     try:
